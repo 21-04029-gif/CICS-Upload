@@ -53,5 +53,6 @@ export interface Liability {
   amount: number;
   source: 'deans_office' | 'student_org' | 'both';
   status: 'pending' | 'paid' | 'pending_validation';
+  taggingType: 'preset' | 'freeText';
   createdAt: number;
 }

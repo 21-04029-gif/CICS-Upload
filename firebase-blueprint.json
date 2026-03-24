@@ -59,13 +59,16 @@
       "properties": {
         "studentUid": { "type": "string" },
         "studentEmail": { "type": "string" },
+        "studentName": { "type": "string" },
         "description": { "type": "string" },
         "amount": { "type": "number" },
-        "source": { "type": "string", "enum": ["deans_office", "student_org"] },
-        "status": { "type": "string", "enum": ["pending", "paid"] },
-        "createdAt": { "type": "number" }
+        "source": { "type": "string", "enum": ["deans_office", "student_org", "both"] },
+        "status": { "type": "string", "enum": ["pending", "paid", "pending_validation"] },
+        "taggingType": { "type": "string", "enum": ["preset", "freeText"] },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
       },
-      "required": ["studentUid", "studentEmail", "description", "amount", "source", "status", "createdAt"]
+      "required": ["studentUid", "studentEmail", "description", "amount", "source", "status", "taggingType", "createdAt"]
     }
   },
   "firestore": {

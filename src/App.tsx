@@ -418,6 +418,10 @@ export default function App() {
 
   const initiateLiabilityPayment = async (liability: Liability) => {
     try {
+      // Determine payment destination based on tagging type
+      const paymentDestination = liability.taggingType === 'preset' ? 'both' : 'deans_office';
+      
+      console.log(`\n📤 Initiating payment for liability: ${liability.id}`);
       const response = await fetch("/api/create-checkout-session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -428,12 +432,17 @@ export default function App() {
           uid: user?.uid,
           studentEmail: user?.email,
           studentName: user?.displayName,
-          destination: liability.source,
+          destination: paymentDestination,
+          taggingType: liability.taggingType,
           origin: window.location.origin
         }),
       });
       const data = await response.json();
+      console.log(`📥 Checkout response:`, data);
+      console.log(`🔍 URL contains placeholder? ${data.url?.includes("{CHECKOUT_SESSION_ID}")}`);
+      
       if (data.url) {
+        console.log(`🔗 Redirecting to: ${data.url}`);
         // Use replace to avoid the user going back to the app page with the Pay button
         window.location.replace(data.url);
       } else {
@@ -461,6 +470,7 @@ export default function App() {
     try {
       const isMembershipFee = description in MEMBERSHIP_FEES;
       const currentSource = isMembershipFee ? 'both' : (role === 'admin' ? 'deans_office' : role);
+      const taggingType = isMembershipFee ? 'preset' : 'freeText';
       
       // Check for existing liability with same description for this student
       const existingLiability = liabilities.find(l => 
@@ -488,6 +498,7 @@ export default function App() {
           description,
           amount,
           source: currentSource,
+          taggingType,
           status: 'pending',
           createdAt: Date.now()
         });
@@ -566,7 +577,7 @@ export default function App() {
       });
       
       // Also find and update the associated transaction to 'completed'
-      const associatedPayment = allPayments.find(p => p.liabilityId === liabilityId && p.status === 'pending');
+      const associatedPayment = allPayments.find(p => p.liabilityId === liabilityId && p.status !== 'completed');
       if (associatedPayment) {
         await updateDoc(doc(db, "payments", associatedPayment.id), {
           status: 'completed',
@@ -950,7 +961,7 @@ export default function App() {
                               {liabilities.filter(l => l.status === 'pending' || l.status === 'pending_validation').length > 0 ? <AlertCircle className="w-6 h-6" /> : <CheckCircle2 className="w-6 h-6" />}
                             </div>
                             <div className="text-right">
-                              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Outstanding</p>
+                              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Liabilities</p>
                               <p className={cn(
                                 "text-3xl font-bold",
                                 liabilities.filter(l => l.status === 'pending' || l.status === 'pending_validation').length > 0 
@@ -1000,7 +1011,7 @@ export default function App() {
                               />
                             </div>
                             <p className="text-[10px] text-amber-600 font-medium">
-                              Awaiting staff verification
+                              Awaiting Verification
                             </p>
                           </div>
                         </motion.div>
@@ -1522,7 +1533,7 @@ export default function App() {
                       <div className="p-10 bg-zinc-900 text-white rounded-[40px] shadow-2xl space-y-8 relative overflow-hidden">
                         <div className="absolute top-0 right-0 w-48 h-48 bg-white/5 rounded-full -mr-24 -mt-24 blur-3xl" />
                         <div className="space-y-2 relative">
-                          <p className="text-zinc-500 text-[10px] font-bold uppercase tracking-widest">Total Outstanding</p>
+                          <p className="text-zinc-500 text-[10px] font-bold uppercase tracking-widest">Total Liabilities</p>
                           <h3 className="text-5xl font-bold tracking-tight">
                             ₱{liabilities.filter(l => l.status === 'pending' || l.status === 'pending_validation').reduce((acc, l) => acc + l.amount, 0).toLocaleString()}
                           </h3>
@@ -2175,14 +2186,14 @@ export default function App() {
                                       {p.status === 'completed' ? 'Validated' : (p.status === 'pending' ? 'Pending' : (p.status || 'Failed'))}
                                     </span>
                                     
-                                    {/* Staff manual resolve button if liability is still pending validation despite successful payment */}
-                                    {role !== 'student' && p.status === 'pending' && isLiabilityAwaitingValidation && (
+                                    {/* Staff validation button for completed payments awaiting verification */}
+                                    {p.status === 'completed' && isLiabilityAwaitingValidation && role !== 'student' && (
                                       <button
                                         onClick={() => markLiabilityAsPaid(p.liabilityId!)}
                                         className="px-2 py-1 rounded-lg text-[9px] font-bold uppercase tracking-widest bg-zinc-900 text-white hover:bg-zinc-800 transition-all shadow-sm"
-                                        title="Manually clear the associated liability"
+                                        title="Validate and clear the associated liability"
                                       >
-                                        Clear Liability
+                                        Validate Payment
                                       </button>
                                     )}
                                   </div>
@@ -2243,14 +2254,15 @@ export default function App() {
                                     p.status === 'pending' ? "bg-amber-50 text-amber-600" :
                                     "bg-rose-50 text-rose-600"
                                   )}>
-                                    {p.status || 'completed'}
+                                    {p.status === 'completed' ? 'Validated' : (p.status === 'pending' ? 'Pending' : (p.status || 'Failed'))}
                                   </span>
-                                  {role !== 'student' && p.status === 'completed' && isLiabilityAwaitingValidation && (
+                                  {p.status === 'completed' && isLiabilityAwaitingValidation && role !== 'student' && (
                                     <button
                                       onClick={() => markLiabilityAsPaid(p.liabilityId!)}
                                       className="px-2 py-0.5 rounded-lg text-[9px] font-bold uppercase tracking-widest bg-zinc-900 text-white"
+                                      title="Validate and clear the associated liability"
                                     >
-                                      Clear Liability
+                                      Validate Payment
                                     </button>
                                   )}
                                 </div>

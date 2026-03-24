@@ -44,6 +44,14 @@ const authHeader = `Basic ${Buffer.from(PAYMONGO_SECRET_KEY + ":").toString("bas
 
 async function startServer() {
   console.log("Starting server...");
+  
+  // Verify PayMongo configuration
+  if (!PAYMONGO_SECRET_KEY) {
+    console.error("❌ ERROR: PAYMONGO_SECRET_KEY is not configured!");
+  } else {
+    console.log(`✅ PayMongo API Key loaded: ${PAYMONGO_SECRET_KEY.substring(0, 10)}...`);
+  }
+  
   // API routes FIRST
   app.use(bodyParser.json());
 
@@ -64,7 +72,11 @@ async function startServer() {
       return res.status(500).json({ error: "PAYMONGO_SECRET_KEY is not configured." });
     }
     const { liabilityId, fileName, amount, uid, destination, studentEmail, studentName, origin } = req.body;
-    console.log(`Creating checkout session for ${studentEmail} (${uid}). Amount: ${amount}. Liability: ${liabilityId}`);
+    console.log(`\n===== CREATE CHECKOUT REQUEST =====`);
+    console.log(`Student: ${studentEmail} (${uid})`);
+    console.log(`Amount: PHP ${amount}`);
+    console.log(`Liability ID: ${liabilityId}`);
+    console.log(`===================================\n`);
 
     try {
       const response = await axios.post(
@@ -107,8 +119,50 @@ async function startServer() {
         }
       );
 
+      console.log("\n===== PAYMONGO FULL RESPONSE =====");
+      console.log(JSON.stringify(response.data, null, 2));
+      console.log("====================================\n");
+
+      if (!response.data.data) {
+        throw new Error("Invalid PayMongo response: no data object");
+      }
+
       const session = response.data.data;
       const sessionId = session.id;
+      const appUrl = origin || process.env.APP_URL || "http://localhost:3000";
+      
+      if (!sessionId) {
+        throw new Error("PayMongo session has no ID");
+      }
+
+      if (!session.attributes?.checkout_url) {
+        throw new Error("PayMongo session has no checkout_url");
+      }
+
+      // PayMongo returns checkout_url with {CHECKOUT_SESSION_ID} placeholder - we need to replace it
+      let checkoutUrl = session.attributes.checkout_url;
+      console.log(`\n🔍 DEBUG: Original checkout_url from PayMongo: ${checkoutUrl}`);
+      console.log(`🔍 DEBUG: Session ID received: ${sessionId}`);
+      console.log(`🔍 DEBUG: Does URL contain {CHECKOUT_SESSION_ID}? ${checkoutUrl.includes("{CHECKOUT_SESSION_ID}")}`);
+      
+      if (checkoutUrl.includes("{CHECKOUT_SESSION_ID}")) {
+        console.log("ℹ️  PayMongo returned URL with placeholder, replacing with actual session ID...");
+        checkoutUrl = checkoutUrl.replace(/{CHECKOUT_SESSION_ID}/g, sessionId);
+        console.log(`✅ URL after replacement: ${checkoutUrl}`);
+        console.log(`🔍 DEBUG: Does new URL still contain placeholder? ${checkoutUrl.includes("{CHECKOUT_SESSION_ID}")}`);
+      } else {
+        console.log("⚠️  URL does not contain placeholder - PayMongo may have changed format");
+      }
+      
+      console.log("\n========== CHECKOUT SESSION CREATED ==========");
+      console.log(`Session ID: ${sessionId}`);
+      console.log(`Status: ${session.attributes.status}`);
+      console.log(`Payment Methods: ${JSON.stringify(session.attributes.payment_method_types)}`);
+      console.log(`Amount: ₱${amount} (${Math.round(amount * 100)} cents)`);
+      console.log(`\n🔍 FINAL URL BEING SENT TO FRONTEND:`);
+      console.log(`${checkoutUrl}`);
+      console.log(`🔍 Contains placeholder? ${checkoutUrl.includes("{CHECKOUT_SESSION_ID}")}`);
+      console.log("==========================================\n");
 
       // Record Pending Payment in Firestore
       if (db) {
@@ -132,10 +186,17 @@ async function startServer() {
         }
       }
 
-      res.json({ id: sessionId, url: session.attributes.checkout_url });
+      console.log(`\n📤 SENDING TO FRONTEND: { id: "${sessionId}", url: "${checkoutUrl}" }\n`);
+      res.json({ id: sessionId, url: checkoutUrl });
     } catch (error: any) {
-      console.error("Paymongo error:", error.response?.data || error.message);
-      res.status(500).json({ error: error.response?.data?.errors?.[0]?.detail || error.message });
+      console.error("\n❌ PAYMONGO ERROR");
+      console.error("Status:", error.response?.status);
+      console.error("Error Response:", JSON.stringify(error.response?.data, null, 2));
+      console.error("Message:", error.message);
+      console.error("============================\n");
+      
+      const errorMessage = error.response?.data?.errors?.[0]?.detail || error.message || "Failed to create checkout session";
+      res.status(error.response?.status || 500).json({ error: errorMessage });
     }
   });
 
@@ -210,7 +271,7 @@ async function startServer() {
         const paymentsRef = db.collection("payments");
         const querySnapshot = await paymentsRef.where("paymentSessionId", "==", cleanSessionId).get();
 
-        const finalStatus = isSucceeded ? "pending" : (isCancelled ? "cancelled" : "failed");
+        const finalStatus = isSucceeded ? "completed" : (isCancelled ? "cancelled" : "failed");
 
         if (querySnapshot.empty) {
           console.log(`Recording new payment for session: ${cleanSessionId} with status: ${finalStatus}`);
@@ -219,10 +280,9 @@ async function startServer() {
             const liabilityRef = db.collection("liabilities").doc(finalLiabilityId as string);
             const liabilityDoc = await liabilityRef.get();
             if (liabilityDoc.exists) {
-              // Change from 'paid' to 'pending_validation' per user request
-              // Staff will manually clear it after validating the transaction
+              // Payment authorized but staff must validate before clearing
               await liabilityRef.update({ status: "pending_validation" });
-              console.log(`Liability ${finalLiabilityId} marked as pending_validation.`);
+              console.log(`Liability ${finalLiabilityId} marked as pending_validation (awaiting staff validation).`);
             }
           }
 
@@ -257,10 +317,9 @@ async function startServer() {
               const liabilityRef = db.collection("liabilities").doc(finalLiabilityId as string);
               const liabilityDoc = await liabilityRef.get();
               if (liabilityDoc.exists) {
-                // Change from 'paid' to 'pending_validation' per user request
-                // Staff will manually clear it after validating the transaction
+                // Payment authorized but staff must validate before clearing
                 await liabilityRef.update({ status: "pending_validation" });
-                console.log(`Liability ${finalLiabilityId} marked as pending_validation.`);
+                console.log(`Liability ${finalLiabilityId} marked as pending_validation (awaiting staff validation).`);
               }
             }
           }
@@ -308,7 +367,7 @@ async function startServer() {
         const paymentsRef = db.collection("payments");
         const querySnapshot = await paymentsRef.where("paymentSessionId", "==", sessionId).get();
 
-        const finalStatus = isSuccess ? "pending" : (isCancelled ? "cancelled" : "failed");
+        const finalStatus = isSuccess ? "completed" : (isCancelled ? "cancelled" : "failed");
 
         if (querySnapshot.empty) {
           console.log(`Webhook: Recording new payment for session: ${sessionId} with status: ${finalStatus}`);
@@ -317,10 +376,9 @@ async function startServer() {
             const liabilityRef = db.collection("liabilities").doc(liabilityId);
             const liabilityDoc = await liabilityRef.get();
             if (liabilityDoc.exists) {
-              // Change from 'paid' to 'pending_validation' per user request
-              // Staff will manually clear it after validating the transaction
+              // Payment authorized but staff must validate before clearing
               await liabilityRef.update({ status: "pending_validation" });
-              console.log(`Webhook: Liability ${liabilityId} marked as pending_validation.`);
+              console.log(`Webhook: Liability ${liabilityId} marked as pending_validation (awaiting staff validation).`);
             }
           }
 
@@ -354,9 +412,9 @@ async function startServer() {
               const liabilityRef = db.collection("liabilities").doc(liabilityId);
               const liabilityDoc = await liabilityRef.get();
               if (liabilityDoc.exists) {
-                // Change from 'paid' to 'pending_validation' per user request
-                // Staff will manually clear it after validating the transaction
+                // Payment authorized but staff must validate before clearing
                 await liabilityRef.update({ status: "pending_validation" });
+                console.log(`Webhook: Liability ${liabilityId} marked as pending_validation (awaiting staff validation).`);
               }
             }
           }
