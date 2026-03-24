@@ -1,0 +1,5 @@
+{
+  "name": "CICS File & Payment Portal",
+  "description": "A secure portal for students and faculty to upload departmental documents and process fee payments.",
+  "requestFramePermissions": []
+}

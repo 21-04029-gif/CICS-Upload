@@ -1,0 +1,198 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required)
+    //   - email: string (optional)
+    //   - displayName: string (optional)
+    //   - photoURL: string (optional)
+    //   - role: string (required, ['student', 'deans_office', 'student_org'])
+    //   - createdAt: number (required)
+    //
+    // Collection: uploads
+    // Document ID: {uploadId}
+    // Fields:
+    //   - uid: string (required)
+    //   - fileName: string (required)
+    //   - fileUrl: string (required)
+    //   - fileType: string (optional)
+    //   - fileSize: number (optional)
+    //   - category: string (optional, ['assignment', 'thesis', 'clearance', 'other'])
+    //   - destination: string (required, ['deans_office', 'student_org'])
+    //   - status: string (required, ['pending_review', 'approved', 'revision_required', 'rejected'])
+    //   - paymentId: string (optional)
+    //   - reviewNotes: string (optional)
+    //   - description: string (required)
+    //   - createdAt: number (required)
+    //
+    // Collection: payments
+    // Document ID: {paymentId}
+    // Fields:
+    //   - uid: string (required)
+    //   - fileId: string (optional)
+    //   - liabilityId: string (optional)
+    //   - destination: string (required, ['deans_office', 'student_org'])
+    //   - amount: number (required)
+    //   - currency: string (optional)
+    //   - purpose: string (optional)
+    //   - status: string (required, ['pending', 'completed', 'failed'])
+    //   - paymentSessionId: string (optional)
+    //   - createdAt: number (required)
+    //
+    // Collection: liabilities
+    // Document ID: {liabilityId}
+    // Fields:
+    //   - studentUid: string (required)
+    //   - studentEmail: string (required)
+    //   - description: string (required)
+    //   - amount: number (required)
+    //   - source: string (required, ['deans_office', 'student_org'])
+    //   - status: string (required, ['pending', 'paid'])
+    //   - createdAt: number (required)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.uid;
+    }
+
+    function isSchoolEmail(email) {
+      return email.matches(".*@g\\.batstate-u\\.edu\\.ph$");
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "andybarreda423@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isDeansOffice() {
+      return isAuthenticated() && 
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'deans_office' ||
+         request.auth.token.email == "andybarreda0731@gmail.com");
+    }
+
+    function isStudentOrg() {
+      return isAuthenticated() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student_org';
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return data.uid is string &&
+             data.role in ['student', 'deans_office', 'student_org', 'admin'] &&
+             data.createdAt is number;
+    }
+
+    function isValidUpload(data) {
+      return data.uid is string &&
+             data.fileName is string && data.fileName.size() < 255 &&
+             data.fileUrl is string && data.fileUrl.size() < 2048 &&
+             data.destination in ['deans_office', 'student_org'] &&
+             data.status in ['pending_review', 'approved', 'revision_required', 'rejected'] &&
+             data.description is string && data.description.size() < 1000 &&
+             data.createdAt is number &&
+             (data.studentEmail == null || data.studentEmail is string) &&
+             (data.fileType == null || data.fileType is string) &&
+             (data.fileSize == null || data.fileSize is number) &&
+             (data.category == null || data.category is string);
+    }
+
+    function isValidPayment(data) {
+      return data.uid is string &&
+             data.destination in ['deans_office', 'student_org'] &&
+             data.amount is number && data.amount >= 0 &&
+             data.status in ['pending', 'completed', 'failed'] &&
+             data.createdAt is number;
+    }
+
+    function isValidLiability(data) {
+      return data.studentUid is string &&
+             data.studentEmail is string &&
+             (data.studentName == null || data.studentName is string) &&
+             data.description is string &&
+             data.amount is number && data.amount >= 0 &&
+             data.source in ['deans_office', 'student_org', 'both'] &&
+             data.status in ['pending', 'paid'] &&
+             data.createdAt is number;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (isOwner(userId) || isAdmin() || isDeansOffice());
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && 
+                      (
+                        (request.resource.data.role == 'student' && isSchoolEmail(request.auth.token.email)) || 
+                        (request.resource.data.role == 'deans_office' && (isSchoolEmail(request.auth.token.email) || request.auth.token.email == "andybarreda0731@gmail.com")) ||
+                        (request.resource.data.role == 'student_org' && isSchoolEmail(request.auth.token.email)) ||
+                        isAdmin()
+                      );
+      allow update: if (isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role) || isAdmin() || 
+                      (isOwner(userId) && request.auth.token.email == "andybarreda0731@gmail.com" && request.resource.data.role == 'deans_office');
+    }
+
+    match /uploads/{uploadId} {
+      allow read: if isAuthenticated() && (isDocOwner() || request.auth.token.email == resource.data.studentEmail || isDeansOffice() || isStudentOrg() || isAdmin());
+      allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid && isValidUpload(request.resource.data);
+      allow update: if isAuthenticated() && (
+        (isDocOwner() && isValidUpload(request.resource.data) && request.resource.data.uid == resource.data.uid && (request.resource.data.status == resource.data.status || request.resource.data.status == 'pending_review')) ||
+        (isDeansOffice() && isValidUpload(request.resource.data) && request.resource.data.uid == resource.data.uid) ||
+        (isStudentOrg() && isValidUpload(request.resource.data) && request.resource.data.uid == resource.data.uid) ||
+        isAdmin()
+      );
+      allow delete: if isAdmin();
+    }
+
+    match /payments/{paymentId} {
+      allow read: if isAuthenticated() && (isDocOwner() || request.auth.token.email == resource.data.studentEmail || isDeansOffice() || isStudentOrg() || isAdmin());
+      allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid && isValidPayment(request.resource.data);
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /liabilities/{liabilityId} {
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.studentUid || request.auth.token.email == resource.data.studentEmail || isDeansOffice() || isStudentOrg() || isAdmin());
+      allow create: if (isDeansOffice() || isStudentOrg() || isAdmin()) && isValidLiability(request.resource.data);
+      allow update: if (isDeansOffice() || isStudentOrg() || isAdmin()) && isValidLiability(request.resource.data) || 
+                      (isAuthenticated() && (request.auth.uid == resource.data.studentUid || request.auth.token.email == resource.data.studentEmail) && request.resource.data.status == 'paid');
+      allow delete: if isDeansOffice() || isStudentOrg() || isAdmin();
+    }
+
+    // Default deny
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}

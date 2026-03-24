@@ -1,0 +1,89 @@
+{
+  "entities": {
+    "users": {
+      "title": "User Profile",
+      "description": "User profile information and role",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["student", "deans_office", "student_org", "admin"] },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["uid", "role", "createdAt"]
+    },
+    "uploads": {
+      "title": "File Upload",
+      "description": "Information about uploaded files",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "fileName": { "type": "string" },
+        "fileUrl": { "type": "string" },
+        "fileType": { "type": "string" },
+        "fileSize": { "type": "number" },
+        "category": { "type": "string", "enum": ["assignment", "thesis", "clearance", "other"] },
+        "destination": { "type": "string", "enum": ["deans_office", "student_org"] },
+        "status": { "type": "string", "enum": ["pending_review", "approved", "revision_required", "rejected"] },
+        "paymentId": { "type": "string" },
+        "reviewNotes": { "type": "string" },
+        "description": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["uid", "fileName", "fileUrl", "destination", "status", "description", "createdAt"]
+    },
+    "payments": {
+      "title": "Payment Transaction",
+      "description": "Information about payments",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "fileId": { "type": "string" },
+        "liabilityId": { "type": "string" },
+        "destination": { "type": "string", "enum": ["deans_office", "student_org"] },
+        "amount": { "type": "number" },
+        "currency": { "type": "string" },
+        "purpose": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "completed", "failed"] },
+        "paymentSessionId": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["uid", "destination", "amount", "status", "createdAt"]
+    },
+    "liabilities": {
+      "title": "Student Liability",
+      "description": "Debts or obligations assigned to students",
+      "type": "object",
+      "properties": {
+        "studentUid": { "type": "string" },
+        "studentEmail": { "type": "string" },
+        "description": { "type": "string" },
+        "amount": { "type": "number" },
+        "source": { "type": "string", "enum": ["deans_office", "student_org"] },
+        "status": { "type": "string", "enum": ["pending", "paid"] },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["studentUid", "studentEmail", "description", "amount", "source", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "users",
+      "description": "User profile documents"
+    },
+    "/uploads/{uploadId}": {
+      "schema": "uploads",
+      "description": "Uploaded file documents"
+    },
+    "/payments/{paymentId}": {
+      "schema": "payments",
+      "description": "Payment transaction documents"
+    },
+    "/liabilities/{liabilityId}": {
+      "schema": "liabilities",
+      "description": "Student liability documents"
+    }
+  }
+}
