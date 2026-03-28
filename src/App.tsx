@@ -1,5 +1,5 @@
 import { onAuthStateChanged, User } from "firebase/auth";
-import { addDoc, collection, onSnapshot, orderBy, query, where, doc, getDoc, setDoc, updateDoc, deleteDoc } from "firebase/firestore";
+import { addDoc, collection, onSnapshot, orderBy, query, where, doc, getDoc, setDoc, updateDoc, deleteDoc, getDocs } from "firebase/firestore";
 import { ref, deleteObject } from "firebase/storage";
 import { 
   LayoutDashboard, 
@@ -12,7 +12,6 @@ import {
   AlertCircle,
   ChevronRight,
   Plus,
-  ArrowUpRight,
   ShieldCheck,
   Users,
   FileSearch,
@@ -24,12 +23,12 @@ import {
   Search,
   Inbox,
   Building2,
+  Eye,
   ExternalLink,
   History as HistoryIcon
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import React, { useEffect, useState, Component, ReactNode, useRef } from "react";
-import axios from "axios";
+import React, { useEffect, useState, Component, useRef } from "react";
 import { Auth } from "./components/Auth";
 import { FileUpload } from "./components/FileUpload";
 import { auth, db, storage } from "./firebase";
@@ -162,18 +161,57 @@ export default function App() {
   const [allStudents, setAllStudents] = useState<UserProfile[]>([]);
   const [liabilities, setLiabilities] = useState<Liability[]>([]);
   const [selectedStudentForLiability, setSelectedStudentForLiability] = useState<UserProfile | null>(null);
+  const [selectedStudentForPreview, setSelectedStudentForPreview] = useState<UserProfile | null>(null);
+  const [selectedStudentUids, setSelectedStudentUids] = useState<string[]>([]);
+  const [isBulkLiabilityModalOpen, setIsBulkLiabilityModalOpen] = useState(false);
   const [liabilityDesc, setLiabilityDesc] = useState("");
   const [liabilityType, setLiabilityType] = useState<string>("other");
   const [liabilityAmount, setLiabilityAmount] = useState("");
   const [authError, setAuthError] = useState<string | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const [rejectionFileId, setRejectionFileId] = useState<string | null>(null);
   const [rejectionComment, setRejectionComment] = useState("");
-  const [viewingCommentFile, setViewingCommentFile] = useState<FileUploadType | null>(null);
+  const [previewFile, setPreviewFile] = useState<FileUploadType | null>(null);
   const [studentSearchTerm, setStudentSearchTerm] = useState("");
   const [paymentResult, setPaymentResult] = useState<{ success: boolean; message: string } | null>(null);
   const paymentProcessedRef = useRef<string | null>(null);
+
+  const getTimeGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return "Good Morning";
+    if (hour < 18) return "Good Afternoon";
+    return "Good Evening";
+  };
+
+  const formatNameFirstLetter = (name?: string | null) => {
+    if (!name) return "User";
+    return name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
+  };
+
+  const isImageFile = (file: FileUploadType) => {
+    const value = `${file.fileType || ""} ${file.fileName || ""} ${file.fileUrl || ""}`.toLowerCase();
+    return value.includes("image/") || /\.(png|jpg|jpeg|gif|webp|bmp|svg)(\?|$)/.test(value);
+  };
+
+  const getHistoryUploads = () => {
+    if (role === 'student') return uploads;
+    if (role === 'admin') return allUploads;
+    return allUploads.filter(u => u.destination === role || u.destination === 'both');
+  };
+
+  const getStudentNumber = (email?: string | null) => {
+    if (!email) return 'N/A';
+    return email.split('@')[0] || 'N/A';
+  };
+
+  const getStudentLastName = (email?: string | null) => {
+    if (!email) return 'N/A';
+    const student = allStudents.find((s) => s.email?.toLowerCase() === email.toLowerCase());
+    const fullName = student?.displayName?.trim();
+    if (!fullName) return 'N/A';
+    const parts = fullName.split(/\s+/);
+    return parts[parts.length - 1] || 'N/A';
+  };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
@@ -259,17 +297,17 @@ export default function App() {
     if (role === 'student') {
       const uploadsQuery = query(
         collection(db, "uploads"),
-        where("studentEmail", "==", user.email),
+        where("uid", "==", user.uid),
         orderBy("createdAt", "desc")
       );
       const paymentsQuery = query(
         collection(db, "payments"),
-        where("studentEmail", "==", user.email),
+        where("uid", "==", user.uid),
         orderBy("createdAt", "desc")
       );
       const studentLiabilitiesQuery = query(
         collection(db, "liabilities"),
-        where("studentEmail", "==", user.email),
+        where("studentUid", "==", user.uid),
         orderBy("createdAt", "desc")
       );
 
@@ -373,7 +411,13 @@ export default function App() {
         setAllStudents(uniqueStudents);
       }, (error) => handleFirestoreError(error, OperationType.GET, "users"));
       
-      const liabilitiesQuery = query(collection(db, "liabilities"), orderBy("createdAt", "desc"));
+      const liabilitiesQuery = role === 'admin'
+        ? query(collection(db, "liabilities"), orderBy("createdAt", "desc"))
+        : query(
+            collection(db, "liabilities"),
+            where("destination", "in", [role, "both"]),
+            orderBy("createdAt", "desc")
+          );
       const unsubLiabilities = onSnapshot(liabilitiesQuery, (snapshot) => {
         setLiabilities(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Liability)));
       }, (error) => handleFirestoreError(error, OperationType.GET, "liabilities"));
@@ -419,9 +463,8 @@ export default function App() {
   const initiateLiabilityPayment = async (liability: Liability) => {
     try {
       // Determine payment destination based on tagging type
-      const paymentDestination = liability.taggingType === 'preset' ? 'both' : 'deans_office';
+      const paymentDestination = (liability.taggingType === 'Preset' || (liability.taggingType as unknown as string) === 'preset') ? 'both' : 'deans_office';
       
-      console.log(`\n📤 Initiating payment for liability: ${liability.id}`);
       const response = await fetch("/api/create-checkout-session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -438,11 +481,10 @@ export default function App() {
         }),
       });
       const data = await response.json();
-      console.log(`📥 Checkout response:`, data);
-      console.log(`🔍 URL contains placeholder? ${data.url?.includes("{CHECKOUT_SESSION_ID}")}`);
-      
-      if (data.url) {
-        console.log(`🔗 Redirecting to: ${data.url}`);
+      if (data.id && data.url) {
+        // Store session ID and liability ID before redirecting to PayMongo
+        sessionStorage.setItem('paymentSessionId', data.id);
+        sessionStorage.setItem('liabilityIdForPayment', liability.id || '');
         // Use replace to avoid the user going back to the app page with the Pay button
         window.location.replace(data.url);
       } else {
@@ -458,7 +500,7 @@ export default function App() {
 
   const MEMBERSHIP_FEES: Record<string, number> = {
     "INTESS Membership Fee": 100,
-    "JPCS Membership Fee": 100,
+    "JPCS Membership Fee": 150,
     "ACCES Membership Fee": 100,
     "AXIS Membership Fee": 100,
     "CICS Membership Fee": 100
@@ -466,6 +508,13 @@ export default function App() {
 
   const addLiability = async (student: UserProfile | null, description: string, amount: number) => {
     if (!role || !student || isAddingLiability) return;
+    
+    // Check if Firestore is initialized
+    if (!db) {
+      setPaymentResult({ success: false, message: "Database not initialized. Please contact administrator." });
+      return;
+    }
+    
     setIsAddingLiability(true);
     try {
       const isMembershipFee = description in MEMBERSHIP_FEES;
@@ -483,11 +532,14 @@ export default function App() {
         // If it exists and from a different source, update to 'both'
         if (existingLiability.source !== currentSource && existingLiability.source !== 'both') {
           await updateDoc(doc(db, "liabilities", existingLiability.id), {
-            source: 'both'
+            source: 'both',
+            destination: 'both'
           });
           console.log("Updated existing liability source to 'both'");
+          setPaymentResult({ success: true, message: "Liability source updated to both Dean's Office and Student Org." });
         } else {
           console.log("Liability already exists, skipping creation");
+          setPaymentResult({ success: false, message: "This liability already exists for this student." });
         }
       } else {
         // Create new liability
@@ -498,17 +550,21 @@ export default function App() {
           description,
           amount,
           source: currentSource,
+          destination: currentSource,
           taggingType,
-          status: 'pending',
+          status: 'unpaid',
           createdAt: Date.now()
         });
+        setPaymentResult({ success: true, message: `Liability added for ${student.displayName}` });
       }
       
       setSelectedStudentForLiability(null);
       setLiabilityDesc("");
       setLiabilityType("other");
       setLiabilityAmount("");
-    } catch (error) {
+    } catch (error: any) {
+      console.error("Error adding liability:", error);
+      setPaymentResult({ success: false, message: `Failed to add liability: ${error.message}` });
       handleFirestoreError(error, OperationType.CREATE, "liabilities");
     } finally {
       setIsAddingLiability(false);
@@ -519,31 +575,11 @@ export default function App() {
     try {
       await updateDoc(doc(db, "uploads", fileId), { 
         status,
+        updatedAt: Date.now(),
         ...(notes && { reviewNotes: notes })
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `uploads/${fileId}`);
-    }
-  };
-
-  const deleteFile = async (file: FileUploadType) => {
-    // We'll skip window.confirm as it's blocked in iframes
-    // In a real app, we'd use a custom modal
-    try {
-      // Delete from Firestore
-      await deleteDoc(doc(db, "uploads", file.id));
-
-      // Try to delete from Storage if it's a Firebase Storage URL
-      if (file.fileUrl.includes("firebasestorage.googleapis.com")) {
-        try {
-          const fileRef = ref(storage, file.fileUrl);
-          await deleteObject(fileRef);
-        } catch (storageErr) {
-          console.warn("Could not delete file from storage (it might have been deleted already):", storageErr);
-        }
-      }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `uploads/${file.id}`);
     }
   };
 
@@ -566,6 +602,136 @@ export default function App() {
       console.log(`Deleted ${pendingTransactions.length} pending transactions.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, "payments/pending");
+    }
+  };
+
+  const clearAllTransactions = async () => {
+    if (role !== 'admin') return;
+    if (allPayments.length === 0) return;
+    if (!confirm(`Are you sure you want to delete all ${allPayments.length} transactions?`)) return;
+
+    try {
+      await Promise.all(allPayments.map((p) => deleteDoc(doc(db, "payments", p.id))));
+      setPaymentResult({ success: true, message: `Deleted ${allPayments.length} transactions.` });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, "payments/all");
+    }
+  };
+
+  const clearAllUploadedDocuments = async () => {
+    if (role !== 'admin') return;
+    if (allUploads.length === 0) return;
+    if (!confirm(`Are you sure you want to delete all ${allUploads.length} uploaded documents?`)) return;
+
+    try {
+      for (const file of allUploads) {
+        await deleteDoc(doc(db, "uploads", file.id));
+        if (file.fileUrl && file.fileUrl.includes("firebasestorage.googleapis.com")) {
+          try {
+            const fileRef = ref(storage, file.fileUrl);
+            await deleteObject(fileRef);
+          } catch (storageErr) {
+            console.warn("Could not delete file from storage:", storageErr);
+          }
+        }
+      }
+      setPaymentResult({ success: true, message: `Deleted ${allUploads.length} uploaded documents.` });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, "uploads/all");
+    }
+  };
+
+  const toggleStudentSelection = (uid: string) => {
+    setSelectedStudentUids((prev) =>
+      prev.includes(uid) ? prev.filter((id) => id !== uid) : [...prev, uid]
+    );
+  };
+
+  const toggleSelectAllFilteredStudents = (filteredStudents: UserProfile[]) => {
+    const filteredIds = filteredStudents.map((s) => s.uid);
+    const allSelected = filteredIds.length > 0 && filteredIds.every((id) => selectedStudentUids.includes(id));
+
+    if (allSelected) {
+      setSelectedStudentUids((prev) => prev.filter((id) => !filteredIds.includes(id)));
+    } else {
+      setSelectedStudentUids((prev) => Array.from(new Set([...prev, ...filteredIds])));
+    }
+  };
+
+  const addLiabilityToSelectedStudents = async (description: string, amount: number) => {
+    if (!role || isAddingLiability) return;
+    if (!db) {
+      setPaymentResult({ success: false, message: "Database not initialized. Please contact administrator." });
+      return;
+    }
+
+    const selectedStudents = allStudents.filter((s) => selectedStudentUids.includes(s.uid));
+    if (selectedStudents.length === 0) {
+      setPaymentResult({ success: false, message: "No students selected." });
+      return;
+    }
+
+    setIsAddingLiability(true);
+    try {
+      const isMembershipFee = description in MEMBERSHIP_FEES;
+      const currentSource = isMembershipFee ? 'both' : (role === 'admin' ? 'deans_office' : role);
+      const taggingType = isMembershipFee ? 'preset' : 'freeText';
+
+      let createdCount = 0;
+      let updatedCount = 0;
+      let skippedCount = 0;
+
+      for (const student of selectedStudents) {
+        const existingLiability = liabilities.find(l =>
+          l.studentEmail === student.email &&
+          l.description.toLowerCase() === description.toLowerCase() &&
+          l.status !== 'paid'
+        );
+
+        if (existingLiability) {
+          if (existingLiability.source !== currentSource && existingLiability.source !== 'both') {
+            await updateDoc(doc(db, "liabilities", existingLiability.id), {
+              source: 'both',
+              destination: 'both'
+            });
+            updatedCount++;
+          } else {
+            skippedCount++;
+          }
+        } else {
+          await addDoc(collection(db, "liabilities"), {
+            studentUid: student.uid,
+            studentEmail: student.email,
+            studentName: student.displayName,
+            description,
+            amount,
+            source: currentSource,
+            destination: currentSource,
+            taggingType,
+            status: 'unpaid',
+            createdAt: Date.now()
+          });
+          createdCount++;
+        }
+      }
+
+      const affected = createdCount + updatedCount;
+      setPaymentResult({
+        success: true,
+        message: `Applied liability to ${affected} students (${createdCount} new, ${updatedCount} updated, ${skippedCount} skipped).`
+      });
+
+      setSelectedStudentUids([]);
+      setIsBulkLiabilityModalOpen(false);
+      setLiabilityDesc("");
+      setLiabilityType("other");
+      setLiabilityAmount("");
+    } catch (error: any) {
+      console.error("Error adding liability to selected students:", error);
+      setPaymentResult({ success: false, message: `Failed bulk liability assignment: ${error.message}` });
+      handleFirestoreError(error, OperationType.CREATE, "liabilities/bulk");
+    } finally {
+      setIsAddingLiability(false);
     }
   };
 
@@ -630,29 +796,34 @@ export default function App() {
   };
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const sessionId = params.get('session_id');
     const type = window.location.pathname;
 
-    // Only proceed if we have a session and are on the success or cancel page
-    if (sessionId && (type === '/payment-success' || type === '/payment-cancel')) {
+    // Only proceed if we're on the success or cancel page
+    if (type === '/payment-success' || type === '/payment-cancel') {
       const isCancellation = type === '/payment-cancel';
       
       // If user is not yet loaded, wait for the next effect run
       if (!user) return;
 
+      // Get session ID from sessionStorage or URL params
+      let sessionId = sessionStorage.getItem('paymentSessionId');
+      if (!sessionId) {
+        const params = new URLSearchParams(window.location.search);
+        sessionId = params.get('session_id');
+      }
+
       // If we've already started processing this session, don't do it again
-      if (paymentProcessedRef.current === sessionId) return;
+      if (!sessionId || paymentProcessedRef.current === sessionId) return;
 
       const verifyPayment = async (retryCount = 0) => {
         try {
-          paymentProcessedRef.current = sessionId;
+          paymentProcessedRef.current = sessionId!;
           console.log(`Initiating payment verification for session: ${sessionId}. Cancellation: ${isCancellation}`);
           
-          setPaymentResult({ success: true, message: isCancellation ? "Updating cancellation status..." : "Verifying your payment... please do not close this window." });
+          setPaymentResult(null);
 
           const queryParams = new URLSearchParams({
-            session_id: sessionId
+            session_id: sessionId!
           });
           
           if (isCancellation) {
@@ -664,15 +835,72 @@ export default function App() {
           console.log("Payment verification response:", data);
           
           if (data.success || data.status === "completed") {
+            // Update local liability status immediately so student UI flips to pending
+            const liabilityIdFromSession = sessionStorage.getItem('liabilityIdForPayment');
+            if (liabilityIdFromSession) {
+              // Force-fetch the fresh liability from Firestore to bypass listener cache
+              try {
+                const liabilityRef = doc(db, "liabilities", liabilityIdFromSession);
+                const freshDoc = await getDoc(liabilityRef);
+                if (freshDoc.exists()) {
+                  const freshData = freshDoc.data();
+                  console.log(`Fresh liability data from Firestore:`, freshData);
+                  // Update local state with fresh data
+                  setLiabilities(prev => prev.map(l => 
+                    l.id === liabilityIdFromSession 
+                      ? { ...l, ...freshData, id: liabilityIdFromSession } 
+                      : l
+                  ));
+                } else {
+                  // Fallback: just set status to pending
+                  setLiabilities(prev => prev.map(l => l.id === liabilityIdFromSession ? { ...l, status: 'pending' } : l));
+                }
+              } catch (error) {
+                console.warn("Could not fetch fresh liability, using optimistic update:", error);
+                setLiabilities(prev => prev.map(l => l.id === liabilityIdFromSession ? { ...l, status: 'pending' } : l));
+              }
+            }
+
+            // Update local payment status immediately in case listener hasn't synced yet
+            if (sessionId) {
+              setPayments(prev => prev.map(p => p.paymentSessionId === sessionId ? { ...p, status: 'completed' } : p));
+            }
+
+            if (liabilityIdFromSession) {
+              let statusConfirmed = false;
+              let confirmationRetries = 0;
+              const maxConfirmationRetries = 10; // Wait max 5 seconds (500ms * 10)
+              
+              while (!statusConfirmed && confirmationRetries < maxConfirmationRetries) {
+                await new Promise(resolve => setTimeout(resolve, 500));
+                const updatedLiability = liabilities.find(l => l.id === liabilityIdFromSession);
+                if (updatedLiability && (updatedLiability.status === 'pending' || updatedLiability.status === 'pending_validation')) {
+                  statusConfirmed = true;
+                  console.log(`Liability status confirmed as '${updatedLiability.status}'`);
+                } else {
+                  confirmationRetries++;
+                  console.log(`Waiting for liability status update... (${confirmationRetries}/${maxConfirmationRetries})`);
+                }
+              }
+              
+              if (!statusConfirmed) {
+                console.warn(`Liability status not updated after retries, but payment was successful. Proceeding with current UI.`);
+              }
+            }
+            
             setPaymentResult({ success: true, message: "Payment successful! Your liability has been settled." });
-            setActiveTab('dashboard');
+            sessionStorage.removeItem('paymentSessionId');
+            sessionStorage.removeItem('liabilityIdForPayment');
+            setActiveTab('payment');
             window.history.replaceState({}, '', '/');
           } else if (data.status === "cancelled") {
             setPaymentResult({ success: false, message: "Payment was cancelled. You can try again whenever you're ready." });
+            sessionStorage.removeItem('paymentSessionId');
             setActiveTab('payment');
             window.history.replaceState({}, '', '/');
           } else if (data.status === "failed") {
             setPaymentResult({ success: false, message: "Your payment was rejected or failed. Please try again or use a different payment method." });
+            sessionStorage.removeItem('paymentSessionId');
             setActiveTab('payment');
             window.history.replaceState({}, '', '/');
           } else if (data.status === "open" && retryCount < 8 && !isCancellation) {
@@ -730,16 +958,18 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-[#F8F9FA] flex flex-col md:flex-row font-sans text-zinc-900 overflow-x-hidden">
+      <div className="theme-cics min-h-screen bg-[#F8F9FA] flex flex-col md:flex-row font-sans text-zinc-900 overflow-x-hidden">
       {/* Sidebar - Only show when logged in */}
       {user && (
         <>
           {/* Mobile Header */}
           <div className="md:hidden flex items-center justify-between p-4 bg-white border-b border-zinc-200 sticky top-0 z-50">
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-zinc-900 rounded-lg flex items-center justify-center">
-                <ShieldCheck className="w-5 h-5 text-white" />
-              </div>
+              <img
+                src="/cics-logo.jpg"
+                alt="CICS Logo"
+                className="w-8 h-8 rounded-lg object-cover"
+              />
               <h1 className="text-sm font-bold tracking-tight">CICS Portal</h1>
             </div>
             <button 
@@ -769,12 +999,14 @@ export default function App() {
             isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
           )}>
             <div className="hidden md:flex items-center gap-3 px-2">
-              <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center">
-                <ShieldCheck className="w-6 h-6 text-white" />
-              </div>
+              <img
+                src="/cics-logo.jpg"
+                alt="CICS Logo"
+                className="w-10 h-10 rounded-xl object-cover"
+              />
               <div className="flex flex-col">
                 <h1 className="text-lg font-bold tracking-tight">CICS Portal</h1>
-                <span className="text-[10px] uppercase tracking-widest text-zinc-400 font-semibold">Department of Computing</span>
+                <span className="text-[10px] uppercase tracking-widest text-zinc-400 font-semibold">College of Informatics and Computing Sciences</span>
               </div>
             </div>
 
@@ -784,7 +1016,6 @@ export default function App() {
             {/* Student Tabs */}
             <NavItem id="upload" icon={Upload} label="Upload Files" roles={['student']} />
             <NavItem id="payment" icon={CreditCard} label="Payment" roles={['student']} />
-            <NavItem id="transactions" icon={Receipt} label="Transactions" roles={['student']} />
             <NavItem id="history" icon={History} label="File Status" roles={['student']} />
 
             {/* Dean's Office Tabs */}
@@ -907,12 +1138,22 @@ export default function App() {
                       </div>
                       <div className="space-y-2">
                         <h1 className="text-4xl md:text-5xl font-bold tracking-tight">
-                          Welcome back, <span className="text-zinc-400">{user?.displayName?.split(' ')[0] || 'User'}</span>
+                          {(role === 'deans_office' || role === 'student_org') ? (
+                            getTimeGreeting()
+                          ) : (
+                            <>
+                              {getTimeGreeting()}, <span className="text-zinc-400">{role === 'student' ? formatNameFirstLetter(user?.displayName?.split(' ')[0]) : (user?.displayName?.split(' ')[0] || 'User')}</span>
+                            </>
+                          )}
                         </h1>
-                        <p className="text-zinc-400 max-w-lg text-lg font-light leading-relaxed">
-                          {role === 'student' 
-                            ? "Track your academic documents and settle your liabilities with ease." 
-                            : "Manage student submissions and monitor department performance."}
+                        <p className="text-zinc-400 text-base md:text-lg font-light leading-relaxed md:whitespace-nowrap">
+                          {role === 'student'
+                            ? "Upload requirements, settle liabilities, and track payment progress in one place."
+                            : role === 'deans_office'
+                            ? "Review submissions, manage liabilities, and verify student transactions with end-to-end control."
+                            : role === 'student_org'
+                            ? "Monitor student organization submissions, apply liabilities, and validate related payments efficiently."
+                            : "Oversee submissions, transactions, liabilities, and user workflows across the entire CICS portal."}
                         </p>
                       </div>
                     </div>
@@ -954,21 +1195,21 @@ export default function App() {
                           <div className="flex items-center justify-between mb-6">
                             <div className={cn(
                               "p-3 rounded-2xl transition-all duration-500",
-                              liabilities.filter(l => l.status === 'pending' || l.status === 'pending_validation').length > 0 
-                                ? (liabilities.some(l => l.status === 'pending_validation') ? "bg-amber-50 text-amber-600 group-hover:bg-amber-600 group-hover:text-white" : "bg-rose-50 text-rose-600 group-hover:bg-rose-600 group-hover:text-white")
+                              liabilities.filter(l => l.status === 'unpaid' || l.status === 'pending').length > 0 
+                                ? (liabilities.some(l => l.status === 'pending') ? "bg-amber-50 text-amber-600 group-hover:bg-amber-600 group-hover:text-white" : "bg-rose-50 text-rose-600 group-hover:bg-rose-600 group-hover:text-white")
                                 : "bg-emerald-50 text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white"
                             )}>
-                              {liabilities.filter(l => l.status === 'pending' || l.status === 'pending_validation').length > 0 ? <AlertCircle className="w-6 h-6" /> : <CheckCircle2 className="w-6 h-6" />}
+                              {liabilities.filter(l => l.status === 'unpaid' || l.status === 'pending').length > 0 ? <AlertCircle className="w-6 h-6" /> : <CheckCircle2 className="w-6 h-6" />}
                             </div>
                             <div className="text-right">
                               <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Liabilities</p>
                               <p className={cn(
                                 "text-3xl font-bold",
-                                liabilities.filter(l => l.status === 'pending' || l.status === 'pending_validation').length > 0 
-                                  ? (liabilities.some(l => l.status === 'pending_validation') ? "text-amber-600" : "text-rose-600") 
+                                liabilities.filter(l => l.status === 'unpaid' || l.status === 'pending').length > 0 
+                                  ? (liabilities.some(l => l.status === 'pending') ? "text-amber-600" : "text-rose-600") 
                                   : "text-emerald-600"
                               )}>
-                                {liabilities.filter(l => l.status === 'pending' || l.status === 'pending_validation').length > 0 ? (liabilities.every(l => l.status === 'pending_validation') ? "Pending" : "Due") : "Clear"}
+                                {liabilities.filter(l => l.status === 'unpaid' || l.status === 'pending').length > 0 ? (liabilities.every(l => l.status === 'pending') ? "Pending" : "Due") : "Clear"}
                               </p>
                             </div>
                           </div>
@@ -981,11 +1222,11 @@ export default function App() {
                                     ? (liabilities.some(l => l.status === 'pending_validation') ? "bg-amber-600" : "bg-rose-600") 
                                     : "bg-emerald-600"
                                 )}
-                                style={{ width: `${liabilities.filter(l => l.status === 'pending' || l.status === 'pending_validation').length > 0 ? 100 : 0}%` }} 
+                                style={{ width: `${liabilities.filter(l => l.status === 'unpaid' || l.status === 'pending').length > 0 ? 100 : 0}%` }} 
                               />
                             </div>
                             <p className="text-[10px] text-zinc-500 font-medium">
-                              {liabilities.filter(l => l.status === 'pending' || l.status === 'pending_validation').length} outstanding liabilities
+                              {liabilities.filter(l => l.status === 'unpaid' || l.status === 'pending').length} outstanding liabilities
                             </p>
                           </div>
                         </motion.div>
@@ -1397,7 +1638,7 @@ export default function App() {
                   <header className="space-y-2">
                     <div className="flex items-center gap-2 text-zinc-500 text-sm font-medium uppercase tracking-wider">
                       <CreditCard className="w-4 h-4" />
-                      <span>Financial Center</span>
+                      <span>PAYMENT</span>
                     </div>
                     <h2 className="text-3xl font-bold tracking-tight text-zinc-900">Payments & Liabilities</h2>
                     <p className="text-zinc-500 text-sm font-medium">Settle your student organization fees and track your transaction history.</p>
@@ -1413,7 +1654,7 @@ export default function App() {
                           </h3>
                         </div>
                         <div className="grid gap-4">
-                          {liabilities.filter(l => l.status === 'pending' || l.status === 'pending_validation').length === 0 ? (
+                          {liabilities.filter(l => l.status === 'unpaid' || l.status === 'pending' || l.status === 'pending_validation').length === 0 ? (
                             <div className="p-16 bg-white rounded-[40px] border border-dashed border-zinc-200 text-center space-y-4 shadow-sm">
                               <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mx-auto">
                                 <CheckCircle2 className="w-8 h-8 text-emerald-500" />
@@ -1424,7 +1665,7 @@ export default function App() {
                               </div>
                             </div>
                           ) : (
-                            liabilities.filter(l => l.status === 'pending' || l.status === 'pending_validation').map(l => (
+                            liabilities.filter(l => l.status === 'unpaid' || l.status === 'pending' || l.status === 'pending_validation').map(l => (
                               <motion.div 
                                 key={l.id} 
                                 whileHover={{ scale: 1.01 }}
@@ -1441,7 +1682,7 @@ export default function App() {
                                     <div className="space-y-0.5">
                                       <div className="flex items-center gap-2">
                                         <h3 className="font-bold text-zinc-900 text-lg">{l.description}</h3>
-                                        {l.status === 'pending_validation' && (
+                                        {(l.status === 'pending' || l.status === 'pending_validation' || payments.some(p => p.liabilityId === l.id && p.status === 'completed')) && (
                                           <span className="px-2 py-0.5 rounded-lg text-[8px] font-bold uppercase tracking-widest bg-amber-50 text-amber-600 border border-amber-100">
                                             Pending
                                           </span>
@@ -1461,7 +1702,7 @@ export default function App() {
                                     <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Amount</p>
                                     <p className="text-2xl font-bold text-zinc-900">₱{l.amount.toLocaleString()}</p>
                                   </div>
-                                  {l.status === 'pending_validation' ? (
+                                  {(l.status === 'pending' || l.status === 'pending_validation' || payments.some(p => p.liabilityId === l.id && p.status === 'completed')) ? (
                                     <div className="px-6 py-4 bg-amber-50 text-amber-600 rounded-2xl text-xs font-bold border border-amber-100 flex items-center gap-2">
                                       <Clock className="w-4 h-4" /> Pending
                                     </div>
@@ -1587,15 +1828,15 @@ export default function App() {
                   <div className="space-y-6">
                     {/* Desktop Table View */}
                     <div className="hidden md:block bg-white rounded-[40px] border border-zinc-200 overflow-hidden shadow-sm">
-                      <table className="w-full text-left border-collapse">
+                      <table className="w-full table-fixed text-left border-collapse">
                         <thead>
                           <tr className="bg-zinc-50/50 border-b border-zinc-100">
-                            <th className="px-8 py-5 text-[10px] font-bold text-zinc-400 uppercase tracking-widest">File Details</th>
-                            <th className="px-8 py-5 text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Student</th>
-                            <th className="px-8 py-5 text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Upload Date</th>
-                            <th className="px-8 py-5 text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Description</th>
-                            <th className="px-8 py-5 text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Status</th>
-                            <th className="px-8 py-5 text-[10px] font-bold text-zinc-400 uppercase tracking-widest text-right">Actions</th>
+                            <th className="w-[27%] px-4 py-4 text-[10px] font-bold text-zinc-400 uppercase tracking-widest">File Details</th>
+                            <th className="w-[21%] px-4 py-4 text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Student</th>
+                            <th className="w-[12%] px-4 py-4 text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Upload Date</th>
+                            <th className="w-[16%] px-4 py-4 text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Description</th>
+                            <th className="w-[10%] px-4 py-4 text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Status</th>
+                            <th className="w-[14%] px-4 py-4 text-[10px] font-bold text-zinc-400 uppercase tracking-widest text-right">Actions</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-zinc-50">
@@ -1609,7 +1850,7 @@ export default function App() {
                             if (reviewFiles.length === 0) {
                               return (
                                 <tr>
-                                  <td colSpan={5} className="px-8 py-20 text-center">
+                                  <td colSpan={6} className="px-4 py-20 text-center">
                                     <div className="space-y-3">
                                       <div className="w-16 h-16 bg-zinc-50 rounded-full flex items-center justify-center mx-auto">
                                         <Inbox className="w-8 h-8 text-zinc-200" />
@@ -1623,45 +1864,56 @@ export default function App() {
 
                             return reviewFiles.map(u => (
                               <tr key={u.id} className="hover:bg-zinc-50/30 transition-colors">
-                                <td className="px-8 py-5">
+                                <td className="px-4 py-4">
                                   <div className="flex items-center gap-3">
                                     <div className="p-2 bg-zinc-100 rounded-xl">
                                       <FileText className="w-5 h-5 text-zinc-600" />
                                     </div>
-                                    <span className="text-sm font-bold text-zinc-900">{u.fileName}</span>
+                                    <div className="min-w-0 flex-1">
+                                      <span className="text-sm font-bold text-zinc-900 truncate block">{u.fileName}</span>
+                                      <div className="mt-1 flex items-center gap-1">
+                                        <button
+                                          onClick={() => setPreviewFile(u)}
+                                          className="p-1.5 hover:bg-zinc-100 rounded-lg transition-colors text-zinc-500 hover:text-zinc-900"
+                                          title="Preview File"
+                                        >
+                                          <Eye className="w-3.5 h-3.5" />
+                                        </button>
+                                        <a href={u.fileUrl} target="_blank" className="p-1.5 hover:bg-zinc-100 rounded-lg transition-colors text-zinc-500 hover:text-zinc-900" title="Open in new tab">
+                                          <ExternalLink className="w-3.5 h-3.5" />
+                                        </a>
+                                      </div>
+                                    </div>
                                   </div>
                                 </td>
-                                <td className="px-8 py-5">
+                                <td className="px-4 py-4">
                                   <div className="flex flex-col">
-                                    <span className="text-sm font-medium text-zinc-600">{u.studentEmail || 'N/A'}</span>
-                                    <span className="text-[10px] text-zinc-400 uppercase font-bold tracking-wider">Student ID: {u.studentId || 'N/A'}</span>
+                                    <span className="text-sm font-medium text-zinc-600 truncate">{getStudentNumber(u.studentEmail)}</span>
+                                    <span className="text-[10px] text-zinc-400 uppercase font-bold tracking-wider">Student Name: {getStudentLastName(u.studentEmail)}</span>
                                   </div>
                                 </td>
-                                <td className="px-8 py-5">
+                                <td className="px-4 py-4">
                                   <span className="text-sm text-zinc-500">{new Date(u.createdAt).toLocaleDateString()}</span>
                                 </td>
-                                <td className="px-8 py-5">
-                                  <p className="text-xs text-zinc-500 max-w-[200px] truncate leading-relaxed" title={u.description}>{u.description}</p>
+                                <td className="px-4 py-4">
+                                  <p className="text-xs text-zinc-500 truncate leading-relaxed" title={u.description}>{u.description}</p>
                                 </td>
-                                <td className="px-8 py-5">
-                                  <span className="px-3 py-1 rounded-xl text-[10px] font-bold uppercase tracking-widest bg-blue-50 text-blue-600 border border-blue-100">
-                                    Pending Review
+                                <td className="px-4 py-4">
+                                  <span className="inline-flex whitespace-nowrap px-2.5 py-1 rounded-xl text-[9px] font-bold uppercase tracking-wide bg-blue-50 text-blue-600 border border-blue-100">
+                                    Pending
                                   </span>
                                 </td>
-                                <td className="px-8 py-5">
-                                  <div className="flex items-center justify-end gap-2">
-                                    <a href={u.fileUrl} target="_blank" className="p-2 hover:bg-zinc-100 rounded-xl transition-colors text-zinc-500 hover:text-zinc-900" title="View File">
-                                      <ExternalLink className="w-4 h-4" />
-                                    </a>
+                                <td className="px-4 py-4">
+                                  <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
                                     <button
                                       onClick={() => updateFileStatus(u.id, 'approved')}
-                                      className="px-4 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all bg-emerald-50 text-emerald-600 hover:bg-emerald-600 hover:text-white border border-emerald-100"
+                                      className="px-2.5 py-1.5 rounded-lg text-[9px] font-bold uppercase tracking-wide transition-all bg-emerald-50 text-emerald-600 hover:bg-emerald-600 hover:text-white border border-emerald-100"
                                     >
                                       Approve
                                     </button>
                                     <button
                                       onClick={() => setRejectionFileId(u.id)}
-                                      className="px-4 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white border border-rose-100"
+                                      className="px-2.5 py-1.5 rounded-lg text-[9px] font-bold uppercase tracking-wide transition-all bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white border border-rose-100"
                                     >
                                       Reject
                                     </button>
@@ -1709,10 +1961,11 @@ export default function App() {
                                 <div className="space-y-0.5">
                                   <h3 className="font-bold text-zinc-900">{u.fileName}</h3>
                                   <div className="flex items-center gap-2">
-                                    <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{u.studentEmail}</p>
+                                    <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{getStudentNumber(u.studentEmail)}</p>
                                     <span className="text-[10px] text-zinc-300">•</span>
                                     <p className="text-[10px] font-medium text-zinc-400">{new Date(u.createdAt).toLocaleDateString()}</p>
                                   </div>
+                                  <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Student Name: {getStudentLastName(u.studentEmail)}</p>
                                 </div>
                               </div>
                               <span className="px-2 py-1 rounded-lg text-[9px] font-bold uppercase tracking-widest bg-blue-50 text-blue-600 border border-blue-100">
@@ -1723,8 +1976,14 @@ export default function App() {
                               <p className="text-xs text-zinc-500 italic leading-relaxed">"{u.description}"</p>
                             </div>
                             <div className="grid grid-cols-1 gap-3 pt-2">
-                              <a href={u.fileUrl} target="_blank" className="w-full py-4 bg-zinc-100 text-zinc-900 rounded-2xl text-xs font-bold text-center flex items-center justify-center gap-2 hover:bg-zinc-200 transition-all">
-                                <ExternalLink className="w-4 h-4" /> View Document
+                              <button
+                                onClick={() => setPreviewFile(u)}
+                                className="w-full py-4 bg-zinc-100 text-zinc-900 rounded-2xl text-xs font-bold text-center flex items-center justify-center gap-2 hover:bg-zinc-200 transition-all"
+                              >
+                                <Eye className="w-4 h-4" /> Preview Document
+                              </button>
+                              <a href={u.fileUrl} target="_blank" className="w-full py-4 bg-zinc-50 text-zinc-700 rounded-2xl text-xs font-bold text-center flex items-center justify-center gap-2 hover:bg-zinc-200 transition-all">
+                                <ExternalLink className="w-4 h-4" /> Open in New Tab
                               </a>
                               <div className="grid grid-cols-2 gap-3">
                                 <button
@@ -1748,6 +2007,58 @@ export default function App() {
                   </div>
 
                   {/* Rejection Comment Modal */}
+                  <AnimatePresence>
+                    {previewFile && (
+                      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+                        <motion.div
+                          initial={{ opacity: 0, y: 10, scale: 0.98 }}
+                          animate={{ opacity: 1, y: 0, scale: 1 }}
+                          exit={{ opacity: 0, y: 10, scale: 0.98 }}
+                          className="bg-white rounded-3xl p-4 md:p-6 w-full max-w-5xl shadow-2xl space-y-4 border border-zinc-100"
+                        >
+                          <div className="flex items-center justify-between gap-4">
+                            <div>
+                              <h3 className="text-xl font-bold text-zinc-900">File Preview</h3>
+                              <p className="text-sm text-zinc-500 truncate max-w-[70vw]">{previewFile.fileName}</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <a
+                                href={previewFile.fileUrl}
+                                target="_blank"
+                                className="px-3 py-2 bg-zinc-100 text-zinc-700 rounded-xl text-xs font-bold hover:bg-zinc-200 transition-all flex items-center gap-2"
+                              >
+                                <ExternalLink className="w-4 h-4" /> Open
+                              </a>
+                              <button
+                                onClick={() => setPreviewFile(null)}
+                                className="p-2 hover:bg-zinc-100 rounded-lg transition-colors"
+                                aria-label="Close preview"
+                              >
+                                <X className="w-5 h-5" />
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="w-full h-[70vh] bg-zinc-50 rounded-2xl border border-zinc-200 overflow-hidden">
+                            {isImageFile(previewFile) ? (
+                              <img
+                                src={previewFile.fileUrl}
+                                alt={previewFile.fileName}
+                                className="w-full h-full object-contain bg-white"
+                              />
+                            ) : (
+                              <iframe
+                                src={previewFile.fileUrl}
+                                title={previewFile.fileName}
+                                className="w-full h-full"
+                              />
+                            )}
+                          </div>
+                        </motion.div>
+                      </div>
+                    )}
+                  </AnimatePresence>
+
                   <AnimatePresence>
                     {rejectionFileId && (
                       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
@@ -1827,10 +2138,40 @@ export default function App() {
                         placeholder="Search by name or email..."
                         value={studentSearchTerm}
                         onChange={(e) => setStudentSearchTerm(e.target.value)}
-                        className="w-full pl-12 pr-4 py-3 bg-white border border-zinc-200 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all shadow-sm"
+                        className="w-full pl-12 pr-16 py-3 bg-white border border-zinc-200 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all shadow-sm"
                       />
+                      {studentSearchTerm && (
+                        <button
+                          onClick={() => setStudentSearchTerm("")}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 rounded-lg transition-all"
+                          aria-label="Clear student search"
+                        >
+                          Clear
+                        </button>
+                      )}
                     </div>
                   </header>
+
+                  {(role === 'deans_office' || role === 'student_org') && (
+                    <div className="flex flex-wrap items-center gap-3">
+                      <button
+                        onClick={() => toggleSelectAllFilteredStudents(allStudents.filter(s =>
+                          (s.displayName || '').toLowerCase().includes(studentSearchTerm.toLowerCase()) ||
+                          (s.email || '').toLowerCase().includes(studentSearchTerm.toLowerCase())
+                        ))}
+                        className="px-4 py-2 bg-zinc-100 text-zinc-700 rounded-xl text-xs font-bold hover:bg-zinc-200 transition-all"
+                      >
+                        Select All Filtered
+                      </button>
+                      <button
+                        onClick={() => setIsBulkLiabilityModalOpen(true)}
+                        disabled={selectedStudentUids.length === 0}
+                        className="px-4 py-2 bg-zinc-900 text-white rounded-xl text-xs font-bold hover:bg-zinc-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Apply Liability to Selected ({selectedStudentUids.length})
+                      </button>
+                    </div>
+                  )}
 
                   <div className="space-y-4">
                     {/* Desktop Table View */}
@@ -1838,9 +2179,27 @@ export default function App() {
                       <table className="w-full text-left text-sm min-w-[800px]">
                         <thead className="bg-zinc-50/50 border-b border-zinc-100">
                           <tr>
+                            {(role === 'deans_office' || role === 'student_org') && (
+                              <th className="px-6 py-4 text-[10px] font-bold text-zinc-400 uppercase tracking-widest">
+                                <input
+                                  type="checkbox"
+                                  checked={allStudents.filter(s =>
+                                    (s.displayName || '').toLowerCase().includes(studentSearchTerm.toLowerCase()) ||
+                                    (s.email || '').toLowerCase().includes(studentSearchTerm.toLowerCase())
+                                  ).length > 0 && allStudents.filter(s =>
+                                    (s.displayName || '').toLowerCase().includes(studentSearchTerm.toLowerCase()) ||
+                                    (s.email || '').toLowerCase().includes(studentSearchTerm.toLowerCase())
+                                  ).every(s => selectedStudentUids.includes(s.uid))}
+                                  onChange={() => toggleSelectAllFilteredStudents(allStudents.filter(s =>
+                                    (s.displayName || '').toLowerCase().includes(studentSearchTerm.toLowerCase()) ||
+                                    (s.email || '').toLowerCase().includes(studentSearchTerm.toLowerCase())
+                                  ))}
+                                  className="w-4 h-4"
+                                />
+                              </th>
+                            )}
                             <th className="px-6 py-4 text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Student Name</th>
                             <th className="px-6 py-4 text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Email Address</th>
-                            <th className="px-6 py-4 text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Liability Status</th>
                             <th className="px-6 py-4 text-[10px] font-bold text-zinc-400 uppercase tracking-widest text-right">Actions</th>
                           </tr>
                         </thead>
@@ -1851,24 +2210,28 @@ export default function App() {
                               (s.email || '').toLowerCase().includes(studentSearchTerm.toLowerCase())
                             )
                             .map(student => {
-                            const studentLiabilities = liabilities.filter(l => l.studentEmail === student.email && (l.status === 'pending' || l.status === 'pending_validation'));
                             return (
                               <React.Fragment key={student.uid}>
                                 <tr className="hover:bg-zinc-50/30 transition-colors">
+                                  {(role === 'deans_office' || role === 'student_org') && (
+                                    <td className="px-6 py-5">
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedStudentUids.includes(student.uid)}
+                                        onChange={() => toggleStudentSelection(student.uid)}
+                                        className="w-4 h-4"
+                                      />
+                                    </td>
+                                  )}
                                   <td className="px-6 py-5">
-                                    <span className="font-bold text-zinc-900">{student.displayName || 'Unnamed Student'}</span>
+                                    <button
+                                      onClick={() => setSelectedStudentForPreview(student)}
+                                      className="font-bold text-zinc-900 hover:text-zinc-600 hover:underline transition-colors text-left"
+                                    >
+                                      {student.displayName || 'Unnamed Student'}
+                                    </button>
                                   </td>
                                   <td className="px-6 py-5 text-zinc-500">{student.email}</td>
-                                  <td className="px-6 py-5">
-                                    <span className={cn(
-                                      "px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider",
-                                      studentLiabilities.length > 0 
-                                        ? (studentLiabilities.every(l => l.status === 'pending_validation') ? "bg-amber-50 text-amber-600" : "bg-rose-50 text-rose-600")
-                                        : "bg-emerald-50 text-emerald-600"
-                                    )}>
-                                      {studentLiabilities.length} {studentLiabilities.every(l => l.status === 'pending_validation') ? "Pending" : "Due"}
-                                    </span>
-                                  </td>
                                   <td className="px-6 py-5 text-right">
                                     <button
                                       onClick={() => setSelectedStudentForLiability(student)}
@@ -1878,48 +2241,12 @@ export default function App() {
                                     </button>
                                   </td>
                                 </tr>
-                                {studentLiabilities.length > 0 && (
-                                  <tr className="bg-zinc-50/30">
-                                    <td colSpan={4} className="px-6 py-6 border-t border-zinc-100/50">
-                                      <div className="space-y-3">
-                                        <div className="flex items-center gap-2 mb-2">
-                                          <div className="w-1 h-3 bg-zinc-900 rounded-full" />
-                                          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Outstanding Liabilities</p>
-                                        </div>
-                                        <div className="flex flex-wrap gap-2">
-                                          {studentLiabilities.map(l => (
-                                            <div key={l.id} className="inline-flex items-center gap-3 pl-3 pr-1 py-1 bg-white border border-zinc-200 rounded-full shadow-sm hover:border-zinc-300 transition-all">
-                                              <span className="text-[11px] font-bold text-zinc-900">{l.description}</span>
-                                              <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">₱{l.amount.toLocaleString()}</span>
-                                              <div className="flex items-center border-l border-zinc-100 ml-1 pl-1">
-                                                <button 
-                                                  onClick={() => markLiabilityAsPaid(l.id!)}
-                                                  className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-full transition-all"
-                                                  title="Mark as Paid"
-                                                >
-                                                  <CheckCircle2 className="w-3.5 h-3.5" />
-                                                </button>
-                                                <button 
-                                                  onClick={() => deleteLiability(l.id!)}
-                                                  className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-full transition-all"
-                                                  title="Remove Liability"
-                                                >
-                                                  <Trash2 className="w-3.5 h-3.5" />
-                                                </button>
-                                              </div>
-                                            </div>
-                                          ))}
-                                        </div>
-                                      </div>
-                                    </td>
-                                  </tr>
-                                )}
                               </React.Fragment>
                             );
                           })}
                           {allStudents.length === 0 && (
                             <tr>
-                              <td colSpan={4} className="px-6 py-16 text-center">
+                              <td colSpan={(role === 'deans_office' || role === 'student_org') ? 4 : 3} className="px-6 py-16 text-center">
                                 <p className="text-sm text-zinc-500 italic">No students found in the directory.</p>
                               </td>
                             </tr>
@@ -1946,6 +2273,16 @@ export default function App() {
                           const studentLiabilities = liabilities.filter(l => l.studentEmail === student.email && (l.status === 'pending' || l.status === 'pending_validation'));
                           return (
                             <div key={student.uid} className="p-6 bg-white rounded-2xl border border-zinc-200 shadow-sm space-y-4">
+                              {(role === 'deans_office' || role === 'student_org') && (
+                                <div className="flex justify-end">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedStudentUids.includes(student.uid)}
+                                    onChange={() => toggleStudentSelection(student.uid)}
+                                    className="w-4 h-4"
+                                  />
+                                </div>
+                              )}
                               <div className="flex justify-between items-start">
                                 <div className="space-y-1">
                                   <h3 className="font-bold text-zinc-900">{student.displayName || 'Unnamed Student'}</h3>
@@ -1961,35 +2298,7 @@ export default function App() {
                                 </span>
                               </div>
                               
-                              {studentLiabilities.length > 0 && (
-                                <div className="space-y-2 pt-2 border-t border-zinc-100">
-                                  <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Outstanding Liabilities</p>
-                                  <div className="flex flex-wrap gap-2">
-                                    {studentLiabilities.map(l => (
-                                      <div key={l.id} className="inline-flex items-center gap-2 pl-2 pr-1 py-1 bg-zinc-50 rounded-full border border-zinc-100">
-                                        <span className="text-[10px] font-bold text-zinc-900">{l.description}</span>
-                                        <span className="text-[10px] font-bold text-emerald-600">₱{l.amount.toLocaleString()}</span>
-                                        <div className="flex items-center border-l border-zinc-200 ml-1 pl-1">
-                                          <button 
-                                            onClick={() => markLiabilityAsPaid(l.id!)}
-                                            className="p-1 text-emerald-600 hover:bg-emerald-100 rounded-full transition-colors"
-                                            title="Mark as Paid"
-                                          >
-                                            <CheckCircle2 className="w-3 h-3" />
-                                          </button>
-                                          <button 
-                                            onClick={() => deleteLiability(l.id!)}
-                                            className="p-1 text-rose-600 hover:bg-rose-100 rounded-full transition-colors"
-                                            title="Remove Liability"
-                                          >
-                                            <Trash2 className="w-3 h-3" />
-                                          </button>
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
+
 
                               <button
                                 onClick={() => setSelectedStudentForLiability(student)}
@@ -2006,7 +2315,7 @@ export default function App() {
 
                   {/* Add Liability Modal */}
                   <AnimatePresence>
-                    {selectedStudentForLiability && (
+                    {(selectedStudentForLiability || isBulkLiabilityModalOpen) && (
                       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
                         <motion.div
                           initial={{ opacity: 0, scale: 0.95 }}
@@ -2016,7 +2325,12 @@ export default function App() {
                         >
                           <div className="space-y-2">
                             <h3 className="text-xl font-bold">Add Liability</h3>
-                            <p className="text-zinc-500 text-sm">Tagging liability for: <span className="font-bold text-zinc-900">{selectedStudentForLiability.displayName}</span></p>
+                            <p className="text-zinc-500 text-sm">
+                              {isBulkLiabilityModalOpen
+                                ? <>Applying liability to: <span className="font-bold text-zinc-900">{selectedStudentUids.length} selected students</span></>
+                                : <>Tagging liability for: <span className="font-bold text-zinc-900">{selectedStudentForLiability?.displayName}</span></>
+                              }
+                            </p>
                           </div>
 
                           <div className="space-y-4">
@@ -2071,13 +2385,22 @@ export default function App() {
 
                           <div className="flex gap-3 pt-2">
                             <button
-                              onClick={() => setSelectedStudentForLiability(null)}
+                              onClick={() => {
+                                setSelectedStudentForLiability(null);
+                                setIsBulkLiabilityModalOpen(false);
+                              }}
                               className="flex-1 px-6 py-3 bg-zinc-100 text-zinc-600 rounded-xl text-sm font-bold hover:bg-zinc-200 transition-all"
                             >
                               Cancel
                             </button>
                             <button
-                              onClick={() => addLiability(selectedStudentForLiability, liabilityDesc, parseFloat(liabilityAmount))}
+                              onClick={() => {
+                                if (isBulkLiabilityModalOpen) {
+                                  addLiabilityToSelectedStudents(liabilityDesc, parseFloat(liabilityAmount));
+                                } else {
+                                  addLiability(selectedStudentForLiability, liabilityDesc, parseFloat(liabilityAmount));
+                                }
+                              }}
                               disabled={!liabilityDesc || !liabilityAmount || isAddingLiability}
                               className="flex-1 px-6 py-3 bg-zinc-900 text-white rounded-xl text-sm font-bold hover:bg-zinc-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                             >
@@ -2095,6 +2418,164 @@ export default function App() {
                       </div>
                     )}
                   </AnimatePresence>
+
+                  {selectedStudentForPreview && (
+                    <div className="fixed inset-0 z-40 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+                      <motion.div
+                        initial={{ opacity: 0, y: 24 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 24 }}
+                        className="bg-white rounded-3xl p-6 w-full max-w-lg shadow-2xl space-y-4"
+                      >
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <h3 className="text-xl font-bold">Student Preview</h3>
+                            <p className="text-sm text-zinc-500">Quick summary of student and liabilities</p>
+                          </div>
+                          <button
+                            onClick={() => setSelectedStudentForPreview(null)}
+                            className="text-zinc-400 hover:text-zinc-700"
+                            aria-label="Close preview"
+                          >
+                            ✕
+                          </button>
+                        </div>
+
+                        <div className="space-y-2">
+                          <p><span className="font-semibold">Name:</span> {selectedStudentForPreview.displayName || 'Unnamed Student'}</p>
+                          <p><span className="font-semibold">Email:</span> {selectedStudentForPreview.email}</p>
+                          <p className="font-semibold">Liabilities:</p>
+                          <div className="space-y-2 max-h-56 overflow-y-auto border border-zinc-100 rounded-xl p-3">
+                            {liabilities.filter(l => l.studentEmail === selectedStudentForPreview.email && l.status !== 'paid' && (role === 'admin' || l.destination === role || l.destination === 'both')).length === 0 ? (
+                              <p className="text-zinc-500 text-sm">No liabilities found for this student.</p>
+                            ) : (
+                              liabilities.filter(l => l.studentEmail === selectedStudentForPreview.email && l.status !== 'paid' && (role === 'admin' || l.destination === role || l.destination === 'both')).map((l) => (
+                                <div key={l.id} className="rounded-lg bg-zinc-50 border border-zinc-100 p-2 flex items-start justify-between gap-2">
+                                  <div>
+                                    <p className="text-sm font-bold text-zinc-700">{l.description}</p>
+                                    <p className="text-xs text-zinc-500">Amount: ₱{l.amount.toLocaleString()}</p>
+                                    <p className="text-xs text-zinc-500">Status: {l.status}</p>
+                                  </div>
+                                  <button
+                                    onClick={() => deleteLiability(l.id!)}
+                                    className="text-rose-600 hover:text-rose-800 text-xs font-bold px-2 py-1 border border-rose-200 rounded-lg"
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              ))
+                            )}
+                          </div>
+
+                          <button
+                            onClick={() => setSelectedStudentForPreview(null)}
+                            className="w-full px-4 py-2 bg-zinc-900 text-white rounded-xl text-sm font-bold hover:bg-zinc-800 transition-all"
+                          >
+                            Close
+                          </button>
+                        </div>
+                      </motion.div>
+                    </div>
+                  )}
+
+                </motion.div>
+              )}
+
+              {activeTab === 'transactions' && (role === 'deans_office' || role === 'student_org') && (
+                <motion.div key="pending-approvals" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-8">
+                  <header className="space-y-2">
+                    <div className="flex items-center gap-2 text-amber-600 text-sm font-medium uppercase tracking-wider">
+                      <Clock className="w-4 h-4" />
+                      <span>Pending Approvals</span>
+                    </div>
+                    <h2 className="text-3xl font-bold tracking-tight text-zinc-900">
+                      Payment Verification
+                    </h2>
+                    <p className="text-zinc-500 text-sm">Review and approve student payments for liabilities.</p>
+                  </header>
+
+                  {liabilities.filter(l => l.status === 'pending' && (role === 'admin' || l.destination === role || l.destination === 'both')).length === 0 ? (
+                    <div className="p-16 bg-white rounded-[40px] border border-dashed border-zinc-200 text-center space-y-4 shadow-sm">
+                      <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mx-auto">
+                        <CheckCircle2 className="w-8 h-8 text-emerald-500" />
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-zinc-900 font-bold text-lg">All caught up!</p>
+                        <p className="text-zinc-400 text-sm">No pending payment approvals at this time.</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {liabilities.filter(l => l.status === 'pending' && (role === 'admin' || l.destination === role || l.destination === 'both')).map(liability => {
+                        const payment = allPayments.find(p => p.liabilityId === liability.id && p.status === 'pending');
+                        return (
+                          <motion.div
+                            key={liability.id}
+                            whileHover={{ scale: 1.01 }}
+                            className="group p-8 bg-white rounded-[32px] border border-amber-100 shadow-sm hover:shadow-xl hover:border-amber-300 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-6 bg-gradient-to-r from-amber-50/50 to-transparent"
+                          >
+                            <div className="space-y-3 flex-1">
+                              <div className="flex items-center gap-3">
+                                <div className="p-2 rounded-xl bg-amber-100 text-amber-600">
+                                  <Building2 className="w-5 h-5" />
+                                </div>
+                                <div className="space-y-0.5">
+                                  <h3 className="font-bold text-zinc-900 text-lg">{liability.description}</h3>
+                                  <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">
+                                    {liability.studentName} ({liability.studentEmail})
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-4 text-sm">
+                                <p className="text-zinc-500">Amount: <span className="font-bold text-zinc-900">₱{liability.amount.toLocaleString()}</span></p>
+                                {payment && (
+                                  <p className="text-zinc-500">Paid: <span className="font-bold text-emerald-600">{new Date(payment.createdAt).toLocaleDateString()}</span></p>
+                                )}
+                                {liability.destination === 'both' && (
+                                  <span className="px-2 py-1 rounded-lg bg-blue-50 text-blue-600 text-[10px] font-bold uppercase tracking-widest border border-blue-100">
+                                    Dropdown
+                                  </span>
+                                )}
+                                {liability.destination === 'deans_office' && role === 'deans_office' && (
+                                  <span className="px-2 py-1 rounded-lg bg-rose-50 text-rose-600 text-[10px] font-bold uppercase tracking-widest border border-rose-100">
+                                    Free Text
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <button
+                              onClick={async () => {
+                                try {
+                                  await updateDoc(doc(db, "liabilities", liability.id), {
+                                    status: "paid"
+                                  });
+                                  if (payment) {
+                                    const paymentRef = collection(db, "payments");
+                                    const q = query(paymentRef, where("paymentSessionId", "==", payment.paymentSessionId));
+                                    const snapshot = await getDocs(q);
+                                    snapshot.forEach(async (docSnapshot) => {
+                                      await updateDoc(doc(db, "payments", docSnapshot.id), {
+                                        status: "completed",
+                                        approvedAt: Date.now(),
+                                        approvedBy: user?.email
+                                      });
+                                    });
+                                  }
+                                  setPaymentResult({ success: true, message: `Liability approved for ${liability.studentName}` });
+                                } catch (error) {
+                                  console.error("Error approving liability:", error);
+                                  setPaymentResult({ success: false, message: "Failed to approve liability" });
+                                }
+                              }}
+                              className="px-8 py-4 bg-emerald-600 text-white rounded-2xl text-sm font-bold hover:bg-emerald-700 hover:shadow-lg active:scale-95 transition-all whitespace-nowrap"
+                            >
+                              ✓ Approve Payment
+                            </button>
+                          </motion.div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </motion.div>
               )}
 
@@ -2119,6 +2600,16 @@ export default function App() {
                           >
                             <Trash2 className="w-3 h-3" />
                             Clear Pending Records
+                          </button>
+                        )}
+                        {role === 'admin' && (
+                          <button
+                            onClick={clearAllTransactions}
+                            className="px-4 py-2 bg-zinc-900 text-white rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-black transition-all flex items-center gap-2"
+                            title="Delete all transaction records"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            Clear All Transactions
                           </button>
                         )}
                         {(role === 'admin' || role === 'deans_office' || role === 'student_org') && liabilities.some(l => l.status === 'pending_validation' && (role === 'admin' || l.source === role || l.source === 'both')) && (
@@ -2300,7 +2791,19 @@ export default function App() {
                     <h2 className="text-3xl font-bold tracking-tight text-zinc-900">
                       {role === 'student' ? 'File Status' : role === 'admin' ? 'Files Uploaded' : 'Received Files'}
                     </h2>
-                    <p className="text-zinc-500 text-sm">Track the status and history of document submissions.</p>
+                    <div className="flex items-center justify-between">
+                      <p className="text-zinc-500 text-sm">Track the status and history of document submissions.</p>
+                      {role === 'admin' && (
+                        <button
+                          onClick={clearAllUploadedDocuments}
+                          className="px-4 py-2 bg-zinc-800 text-white rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-black transition-all flex items-center gap-2"
+                          title="Delete all uploaded documents"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          Clear All Uploads
+                        </button>
+                      )}
+                    </div>
                   </header>
 
                   <div className="bg-white rounded-3xl border border-zinc-200 shadow-sm overflow-hidden">
@@ -2314,16 +2817,10 @@ export default function App() {
                               <th className="px-6 py-5 text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Upload Date</th>
                               <th className="px-6 py-5 text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Destination</th>
                               <th className="px-6 py-5 text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Status</th>
-                              <th className="px-6 py-5 text-[10px] font-bold text-zinc-400 uppercase tracking-widest text-right">Actions</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-zinc-50">
-                          {(role === 'student' 
-                            ? uploads 
-                            : role === 'admin' 
-                              ? allUploads 
-                              : allUploads.filter(u => u.destination === role)
-                          ).map(u => (
+                          {getHistoryUploads().map(u => (
                             <React.Fragment key={u.id}>
                               <tr className="hover:bg-zinc-50/30 transition-colors group">
                                 <td className="px-6 py-5">
@@ -2361,59 +2858,12 @@ export default function App() {
                                     {u.status.replace('_', ' ')}
                                   </span>
                                 </td>
-                                <td className="px-6 py-5 text-right">
-                                  <div className="flex items-center justify-end gap-2">
-                                    <a href={u.fileUrl} target="_blank" className="p-2 text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 rounded-xl transition-all" title="View File">
-                                      <ExternalLink className="w-5 h-5" />
-                                    </a>
-                                    {u.reviewNotes && (
-                                      <button 
-                                        onClick={() => setViewingCommentFile(u)}
-                                        className="p-2 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all"
-                                        title="View Comment"
-                                      >
-                                        <AlertCircle className="w-5 h-5" />
-                                      </button>
-                                    )}
-                                    {role === 'admin' && (
-                                      <div className="flex items-center gap-2">
-                                        {confirmingDelete === u.id ? (
-                                          <div className="flex items-center gap-1">
-                                            <button 
-                                              onClick={() => {
-                                                deleteFile(u);
-                                                setConfirmingDelete(null);
-                                              }}
-                                              className="text-[10px] font-bold text-red-600 bg-red-50 px-2 py-1 rounded-lg hover:bg-red-100 transition-all"
-                                            >
-                                              Confirm
-                                            </button>
-                                            <button 
-                                              onClick={() => setConfirmingDelete(null)}
-                                              className="text-[10px] font-bold text-zinc-400 hover:text-zinc-600 px-2 py-1"
-                                            >
-                                              Cancel
-                                            </button>
-                                          </div>
-                                        ) : (
-                                          <button 
-                                            onClick={() => setConfirmingDelete(u.id)}
-                                            className="p-2 text-zinc-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all"
-                                            title="Delete"
-                                          >
-                                            <Trash2 className="w-5 h-5" />
-                                          </button>
-                                        )}
-                                      </div>
-                                    )}
-                                  </div>
-                                </td>
                               </tr>
                             </React.Fragment>
                           ))}
-                          {(role === 'student' ? uploads : allUploads).length === 0 && (
+                          {getHistoryUploads().length === 0 && (
                             <tr>
-                              <td colSpan={role === 'student' ? 5 : 6} className="px-6 py-16 text-center">
+                              <td colSpan={role === 'student' ? 4 : 5} className="px-6 py-16 text-center">
                                 <p className="text-sm text-zinc-500 italic">No submission history found.</p>
                               </td>
                             </tr>
@@ -2424,12 +2874,7 @@ export default function App() {
 
                     {/* Mobile Card View */}
                     <div className="md:hidden divide-y divide-zinc-100">
-                      {(role === 'student' 
-                        ? uploads 
-                        : role === 'admin' 
-                          ? allUploads 
-                          : allUploads.filter(u => u.destination === role)
-                      ).map(u => (
+                      {getHistoryUploads().map(u => (
                         <div key={u.id} className="p-6 space-y-4">
                           <div className="flex justify-between items-start">
                             <div className="space-y-1">
@@ -2459,30 +2904,15 @@ export default function App() {
                               <p className="text-xs text-zinc-500 leading-relaxed italic">"{u.description || 'No description'}"</p>
                             </div>
 
-                          <div className="flex gap-3">
-                            <a href={u.fileUrl} target="_blank" className="flex-1 py-2.5 bg-zinc-100 text-zinc-900 rounded-xl text-xs font-bold flex items-center justify-center gap-2">
-                              <FileText className="w-4 h-4" /> View
-                            </a>
-                            {u.reviewNotes && (
-                              <button 
-                                onClick={() => setViewingCommentFile(u)}
-                                className="flex-1 py-2.5 bg-rose-50 text-rose-600 rounded-xl text-xs font-bold flex items-center justify-center gap-2"
-                              >
-                                <AlertCircle className="w-4 h-4" /> Comment
-                              </button>
-                            )}
-                            {role === 'admin' && (
-                              <button 
-                                onClick={() => deleteFile(u)}
-                                className="p-2.5 text-rose-600 bg-rose-50 rounded-xl"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            )}
-                          </div>
+                          {u.reviewNotes && (
+                            <div className="p-3 bg-rose-50 border border-rose-100 rounded-xl">
+                              <p className="text-[10px] font-bold text-rose-500 uppercase tracking-wider mb-1">Comment</p>
+                              <p className="text-xs text-rose-700">{u.reviewNotes}</p>
+                            </div>
+                          )}
                         </div>
                       ))}
-                      {(role === 'student' ? uploads : allUploads).length === 0 && (
+                      {getHistoryUploads().length === 0 && (
                         <div className="p-12 text-center">
                           <p className="text-sm text-zinc-500 italic">No files found.</p>
                         </div>
@@ -2490,40 +2920,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* View Comment Modal */}
-                  <AnimatePresence>
-                    {viewingCommentFile && (
-                      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-                        <motion.div
-                          initial={{ opacity: 0, scale: 0.95 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          exit={{ opacity: 0, scale: 0.95 }}
-                          className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl space-y-6"
-                        >
-                          <div className="space-y-2">
-                            <div className="flex items-center gap-2 text-rose-600">
-                              <AlertCircle className="w-5 h-5" />
-                              <h3 className="text-xl font-bold">Rejection Comment</h3>
-                            </div>
-                            <p className="text-zinc-500 text-sm">Feedback for: <span className="font-bold text-zinc-900">{viewingCommentFile.fileName}</span></p>
-                          </div>
-
-                          <div className="p-4 bg-rose-50 rounded-2xl border border-rose-100">
-                            <p className="text-sm text-zinc-700 leading-relaxed italic">
-                              "{viewingCommentFile.reviewNotes}"
-                            </p>
-                          </div>
-
-                          <button
-                            onClick={() => setViewingCommentFile(null)}
-                            className="w-full px-6 py-3 bg-zinc-900 text-white rounded-xl font-bold hover:bg-zinc-800 transition-all"
-                          >
-                            Close
-                          </button>
-                        </motion.div>
-                      </div>
-                    )}
-                  </AnimatePresence>
                 </motion.div>
               )}
             </AnimatePresence>

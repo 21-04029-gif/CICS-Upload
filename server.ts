@@ -10,6 +10,23 @@ import { getFirestore } from "firebase-admin/firestore";
 
 dotenv.config();
 
+// Normalize GOOGLE_APPLICATION_CREDENTIALS from .env so Firebase Admin gets a valid file path.
+const rawCredentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+if (rawCredentialsPath) {
+  let normalizedCredentialsPath = rawCredentialsPath.trim().replace(/^['\"]|['\"]$/g, "");
+  const homeDir = process.env.HOME || "";
+
+  if (normalizedCredentialsPath.startsWith("$HOME/")) {
+    normalizedCredentialsPath = path.join(homeDir, normalizedCredentialsPath.slice("$HOME/".length));
+  } else if (normalizedCredentialsPath.startsWith("~/")) {
+    normalizedCredentialsPath = path.join(homeDir, normalizedCredentialsPath.slice(2));
+  } else if (!path.isAbsolute(normalizedCredentialsPath)) {
+    normalizedCredentialsPath = path.resolve(process.cwd(), normalizedCredentialsPath);
+  }
+
+  process.env.GOOGLE_APPLICATION_CREDENTIALS = normalizedCredentialsPath;
+}
+
 let firebaseConfig: any;
 try {
   const configPath = path.join(process.cwd(), "firebase-applet-config.json");
@@ -26,10 +43,29 @@ try {
 // Initialize Firebase Admin
 if (firebaseConfig && !admin.apps.length) {
   try {
-    admin.initializeApp({
+    const initConfig: any = {
       projectId: firebaseConfig.projectId,
-    });
-    console.log("Firebase Admin initialized.");
+    };
+    
+    // Try to load service account credentials if available
+    const serviceAccountPath = path.join(process.cwd(), "firebase-service-account.json");
+    if (fs.existsSync(serviceAccountPath)) {
+      const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, "utf-8"));
+      initConfig.credential = admin.credential.cert(serviceAccount);
+      console.log("Firebase Admin initialized with service account credentials.");
+    } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS && fs.existsSync(process.env.GOOGLE_APPLICATION_CREDENTIALS)) {
+      // Already set via environment variable, SDK will pick it up automatically
+      console.log("Firebase Admin initialized with GOOGLE_APPLICATION_CREDENTIALS environment variable.");
+    } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+      console.warn(`⚠️  GOOGLE_APPLICATION_CREDENTIALS path not found: ${process.env.GOOGLE_APPLICATION_CREDENTIALS}`);
+      console.warn("   Please set GOOGLE_APPLICATION_CREDENTIALS to an absolute path of your JSON key file.");
+    } else {
+      console.warn("⚠️  No service account credentials found. Firestore write operations may fail.");
+      console.warn("   Please set GOOGLE_APPLICATION_CREDENTIALS or place firebase-service-account.json in the root directory.");
+    }
+    
+    admin.initializeApp(initConfig);
+    console.log("Firebase Admin SDK initialized for project:", firebaseConfig.projectId);
   } catch (error) {
     console.error("Error initializing Firebase Admin:", error);
   }
@@ -97,8 +133,8 @@ async function startServer() {
                 },
               ],
               payment_method_types: ["card", "gcash", "paymaya"],
-              success_url: `${origin || process.env.APP_URL || "http://localhost:3000"}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-              cancel_url: `${origin || process.env.APP_URL || "http://localhost:3000"}/payment-cancel?session_id={CHECKOUT_SESSION_ID}`,
+              success_url: `${origin || process.env.APP_URL || "http://localhost:3000"}/payment-success`,
+              cancel_url: `${origin || process.env.APP_URL || "http://localhost:3000"}/payment-cancel`,
               description: `Liability Payment for: ${fileName}`,
               metadata: {
                 liabilityId: liabilityId || "",
@@ -141,27 +177,18 @@ async function startServer() {
 
       // PayMongo returns checkout_url with {CHECKOUT_SESSION_ID} placeholder - we need to replace it
       let checkoutUrl = session.attributes.checkout_url;
-      console.log(`\n🔍 DEBUG: Original checkout_url from PayMongo: ${checkoutUrl}`);
-      console.log(`🔍 DEBUG: Session ID received: ${sessionId}`);
-      console.log(`🔍 DEBUG: Does URL contain {CHECKOUT_SESSION_ID}? ${checkoutUrl.includes("{CHECKOUT_SESSION_ID}")}`);
-      
       if (checkoutUrl.includes("{CHECKOUT_SESSION_ID}")) {
         console.log("ℹ️  PayMongo returned URL with placeholder, replacing with actual session ID...");
         checkoutUrl = checkoutUrl.replace(/{CHECKOUT_SESSION_ID}/g, sessionId);
-        console.log(`✅ URL after replacement: ${checkoutUrl}`);
-        console.log(`🔍 DEBUG: Does new URL still contain placeholder? ${checkoutUrl.includes("{CHECKOUT_SESSION_ID}")}`);
-      } else {
-        console.log("⚠️  URL does not contain placeholder - PayMongo may have changed format");
       }
       
       console.log("\n========== CHECKOUT SESSION CREATED ==========");
       console.log(`Session ID: ${sessionId}`);
       console.log(`Status: ${session.attributes.status}`);
+      console.log(`Original URL: ${session.attributes.checkout_url}`);
+      console.log(`Final Checkout URL: ${checkoutUrl}`);
       console.log(`Payment Methods: ${JSON.stringify(session.attributes.payment_method_types)}`);
       console.log(`Amount: ₱${amount} (${Math.round(amount * 100)} cents)`);
-      console.log(`\n🔍 FINAL URL BEING SENT TO FRONTEND:`);
-      console.log(`${checkoutUrl}`);
-      console.log(`🔍 Contains placeholder? ${checkoutUrl.includes("{CHECKOUT_SESSION_ID}")}`);
       console.log("==========================================\n");
 
       // Record Pending Payment in Firestore
@@ -181,13 +208,24 @@ async function startServer() {
             createdAt: Date.now(),
           });
           console.log(`Pending payment record created for session: ${sessionId}`);
-        } catch (fsError) {
-          console.error("Error recording pending payment:", fsError);
+        } catch (fsError: any) {
+          console.warn(`⚠️  Warning: Could not record pending payment to Firestore: ${fsError.message}`);
+          console.warn("This is non-critical - payment verification will work from PayMongo API.");
         }
+      } else {
+        console.warn("⚠️  Firestore not initialized - skipping pending payment record. This is non-critical.");
       }
 
-      console.log(`\n📤 SENDING TO FRONTEND: { id: "${sessionId}", url: "${checkoutUrl}" }\n`);
-      res.json({ id: sessionId, url: checkoutUrl });
+      // Return the actual session ID along with checkout URL for frontend to use
+      res.json({ 
+        id: sessionId, 
+        url: checkoutUrl,
+        metadata: {
+          liabilityId,
+          destination,
+          amount
+        }
+      });
     } catch (error: any) {
       console.error("\n❌ PAYMONGO ERROR");
       console.error("Status:", error.response?.status);
@@ -212,10 +250,10 @@ async function startServer() {
       return res.status(400).json({ error: "Missing session_id" });
     }
 
-    // Check if session_id is the literal placeholder string
-    if (session_id === "{CHECKOUT_SESSION_ID}") {
-      console.error("Verification error: session_id is still the literal placeholder {CHECKOUT_SESSION_ID}");
-      return res.status(400).json({ error: "Invalid session ID. Paymongo did not replace the placeholder correctly." });
+    // Check if session_id is valid
+    if (!session_id || session_id === "{CHECKOUT_SESSION_ID}" || typeof session_id !== "string") {
+      console.error("Verification error: Invalid or missing session_id", session_id);
+      return res.status(400).json({ error: "Invalid session ID. Please ensure you were redirected correctly from PayMongo." });
     }
 
     console.log(`Verifying payment for session: ${session_id}. Force status: ${force_status || 'none'}`);
@@ -268,61 +306,73 @@ async function startServer() {
 
         console.log(`Processing session (${status}). Final Data:`, { finalLiabilityId, finalUid, finalAmount, finalDest });
 
-        const paymentsRef = db.collection("payments");
-        const querySnapshot = await paymentsRef.where("paymentSessionId", "==", cleanSessionId).get();
-
         const finalStatus = isSucceeded ? "completed" : (isCancelled ? "cancelled" : "failed");
 
-        if (querySnapshot.empty) {
-          console.log(`Recording new payment for session: ${cleanSessionId} with status: ${finalStatus}`);
-          // Update Liability if paid
-          if (isSucceeded && finalLiabilityId) {
-            const liabilityRef = db.collection("liabilities").doc(finalLiabilityId as string);
-            const liabilityDoc = await liabilityRef.get();
-            if (liabilityDoc.exists) {
-              // Payment authorized but staff must validate before clearing
-              await liabilityRef.update({ status: "pending_validation" });
-              console.log(`Liability ${finalLiabilityId} marked as pending_validation (awaiting staff validation).`);
-            }
-          }
+        // Try to update Firestore if available
+        if (db) {
+          try {
+            const paymentsRef = db.collection("payments");
+            const querySnapshot = await paymentsRef.where("paymentSessionId", "==", cleanSessionId).get();
 
-          // Record Payment
-          await paymentsRef.add({
-            uid: finalUid || null,
-            studentEmail: studentEmail || null,
-            studentName: studentName || null,
-            liabilityId: finalLiabilityId || null,
-            destination: finalDest || "deans_office",
-            amount: finalAmount ? parseFloat(finalAmount as string) : 0,
-            currency: "PHP",
-            purpose: "Liability Payment",
-            status: finalStatus,
-            paymentSessionId: cleanSessionId,
-            createdAt: Date.now(),
-          });
-        } else {
-          // Update existing record
-          const docId = querySnapshot.docs[0].id;
-          const currentData = querySnapshot.docs[0].data();
-          
-          // Only update if status is changing to a final state or if it's currently pending
-          if (currentData.status === "pending" || (currentData.status !== "completed" && isSucceeded)) {
-            console.log(`Updating existing payment ${docId} to status: ${finalStatus}`);
-            await paymentsRef.doc(docId).update({ 
-              status: finalStatus,
-              updatedAt: Date.now()
-            });
+            const syncLiabilityToPending = async () => {
+              if (!isSucceeded || !finalLiabilityId) return;
 
-            if (isSucceeded && finalLiabilityId) {
               const liabilityRef = db.collection("liabilities").doc(finalLiabilityId as string);
               const liabilityDoc = await liabilityRef.get();
-              if (liabilityDoc.exists) {
-                // Payment authorized but staff must validate before clearing
-                await liabilityRef.update({ status: "pending_validation" });
-                console.log(`Liability ${finalLiabilityId} marked as pending_validation (awaiting staff validation).`);
+              if (!liabilityDoc.exists) {
+                console.error(`❌ Liability document not found: ${finalLiabilityId}`);
+                return;
+              }
+
+              const currentLiabilityData = liabilityDoc.data() || {};
+              // Keep approved liabilities as paid; otherwise mark as pending after payment.
+              if (currentLiabilityData.status !== "paid" && currentLiabilityData.status !== "pending") {
+                const updateData = { status: "pending", paidAt: Date.now() };
+                await liabilityRef.update(updateData);
+                console.log(`✅ Liability ${finalLiabilityId} successfully updated to pending. Update data:`, updateData);
+                console.log(`Destination: ${finalDest} - Approvers: ${finalDest === "both" ? "Student Org & Dean's Office" : "Dean's Office only"}`);
+              }
+            };
+
+            if (querySnapshot.empty) {
+              console.log(`Recording new payment for session: ${cleanSessionId} with status: ${finalStatus}`);
+              // Record Payment
+              await paymentsRef.add({
+                uid: finalUid || null,
+                studentEmail: studentEmail || null,
+                studentName: studentName || null,
+                liabilityId: finalLiabilityId || null,
+                destination: finalDest || "deans_office",
+                amount: finalAmount ? parseFloat(finalAmount as string) : 0,
+                currency: "PHP",
+                purpose: "Liability Payment",
+                status: finalStatus,
+                paymentSessionId: cleanSessionId,
+                createdAt: Date.now(),
+              });
+            } else {
+              // Update existing record
+              const docId = querySnapshot.docs[0].id;
+              const currentData = querySnapshot.docs[0].data();
+              
+              // Only update if status is changing to a final state or if it's currently pending
+              if (currentData.status === "pending" || (currentData.status !== "completed" && isSucceeded)) {
+                console.log(`Updating existing payment ${docId} to status: ${finalStatus}`);
+                await paymentsRef.doc(docId).update({ 
+                  status: finalStatus,
+                  updatedAt: Date.now()
+                });
               }
             }
+
+            // Always attempt liability sync for successful payments, even when payment doc is already completed.
+            await syncLiabilityToPending();
+          } catch (fsError: any) {
+            console.warn(`⚠️  Could not update Firestore records: ${fsError.message}`);
+            console.warn("Payment status will still be verified from PayMongo API.");
           }
+        } else {
+          console.warn("⚠️  Firestore not initialized - skipping database updates. Payment status verified via PayMongo API.");
         }
         
         return res.json({ success: isSucceeded, status: finalStatus, piStatus });
@@ -357,6 +407,11 @@ async function startServer() {
       const metadata = session.attributes.metadata || {};
 
       try {
+        if (!db) {
+          console.warn(`Warning: Firestore not initialized - skipping payment processing for session ${sessionId}.`);
+          return res.json({ received: true, warning: "Firestore not initialized" });
+        }
+
         const { liabilityId, uid, studentEmail, studentName, destination, amount } = metadata;
         const paymentIntent = session.attributes.payment_intent;
         const piStatus = paymentIntent?.attributes?.status;
@@ -376,9 +431,12 @@ async function startServer() {
             const liabilityRef = db.collection("liabilities").doc(liabilityId);
             const liabilityDoc = await liabilityRef.get();
             if (liabilityDoc.exists) {
-              // Payment authorized but staff must validate before clearing
-              await liabilityRef.update({ status: "pending_validation" });
-              console.log(`Webhook: Liability ${liabilityId} marked as pending_validation (awaiting staff validation).`);
+              // Mark as pending - awaiting approval
+              // If destination is "both" (from dropdown): both student org and dean's office can approve
+              // If destination is "deans_office" (from free text): only dean's office can approve
+              const dest = liabilityDoc.data().destination || destination;
+              await liabilityRef.update({ status: "pending", paidAt: Date.now() });
+              console.log(`Webhook: Liability ${liabilityId} marked as pending. Destination: ${dest} - Approvers: ${dest === "both" ? "Student Org & Dean's Office" : "Dean's Office only"}`);
             }
           }
 
@@ -412,9 +470,12 @@ async function startServer() {
               const liabilityRef = db.collection("liabilities").doc(liabilityId);
               const liabilityDoc = await liabilityRef.get();
               if (liabilityDoc.exists) {
-                // Payment authorized but staff must validate before clearing
-                await liabilityRef.update({ status: "pending_validation" });
-                console.log(`Webhook: Liability ${liabilityId} marked as pending_validation (awaiting staff validation).`);
+                // Mark as pending - awaiting approval
+                // If destination is "both" (from dropdown): both student org and dean's office can approve
+                // If destination is "deans_office" (from free text): only dean's office can approve
+                const dest = liabilityDoc.data().destination || destination;
+                await liabilityRef.update({ status: "pending", paidAt: Date.now() });
+                console.log(`Webhook: Liability ${liabilityId} marked as pending. Destination: ${dest} - Approvers: ${dest === "both" ? "Student Org & Dean's Office" : "Dean's Office only"}`);
               }
             }
           }

@@ -19,8 +19,8 @@ export interface FileUpload {
   fileUrl: string;
   fileType: string;
   fileSize: number;
-  category: 'assignment' | 'thesis' | 'clearance' | 'other';
-  destination: 'deans_office' | 'student_org' | 'both';
+  category: 'Thesis' | 'Clearance' | 'Other';
+  destination: 'Deans_Office' | 'Student_Org' | 'Both';
   status: FileStatus;
   paymentId?: string;
   reviewNotes?: string;
@@ -35,11 +35,11 @@ export interface PaymentTransaction {
   studentName?: string;
   fileId?: string;
   liabilityId?: string;
-  destination: 'deans_office' | 'student_org' | 'both';
+  destination: 'Deans_Office' | 'Student_Org' | 'Both';
   amount: number;
   currency: string;
   purpose: string;
-  status: 'pending' | 'completed' | 'failed';
+  status: 'Pending' | 'Paid' | 'Failed';
   paymentSessionId: string;
   createdAt: number;
 }
@@ -51,8 +51,8 @@ export interface Liability {
   studentName?: string;
   description: string;
   amount: number;
-  source: 'deans_office' | 'student_org' | 'both';
-  status: 'pending' | 'paid' | 'pending_validation';
-  taggingType: 'preset' | 'freeText';
+  source: 'Deans_Office' | 'Student_Org' | 'Both';
+  status: 'Pending' | 'Paid';
+  taggingType: 'Preset' | 'FreeText';
   createdAt: number;
 }

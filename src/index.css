@@ -1,1 +1,94 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&display=swap");
 @import "tailwindcss";
+
+:root {
+	--cics-navy: #041b34;
+	--cics-navy-2: #0a2f57;
+	--cics-blue: #1f8ed8;
+	--cics-sky: #7ec4ec;
+	--cics-ink: #0f2239;
+	--cics-surface: #f2f8fc;
+	--cics-card: #ffffff;
+	--cics-border: #d7e6f2;
+}
+
+html,
+body,
+#root {
+	min-height: 100%;
+}
+
+body {
+	font-family: "Manrope", "Segoe UI", sans-serif;
+	color: var(--cics-ink);
+	background:
+		radial-gradient(circle at 20% 10%, rgba(126, 196, 236, 0.2) 0%, rgba(126, 196, 236, 0) 35%),
+		radial-gradient(circle at 80% 0%, rgba(31, 142, 216, 0.15) 0%, rgba(31, 142, 216, 0) 35%),
+		linear-gradient(180deg, #f7fbfe 0%, #edf5fb 100%);
+}
+
+.theme-cics {
+	color: var(--cics-ink);
+}
+
+.theme-cics [class*="bg-zinc-900"] {
+	background-color: var(--cics-navy) !important;
+}
+
+.theme-cics [class*="text-zinc-900"] {
+	color: var(--cics-ink) !important;
+}
+
+.theme-cics [class*="border-zinc-200"],
+.theme-cics [class*="border-zinc-100"] {
+	border-color: var(--cics-border) !important;
+}
+
+.theme-cics [class*="bg-zinc-50"] {
+	background-color: #f4f9fd !important;
+}
+
+.theme-cics [class*="text-zinc-400"] {
+	color: #5f7790 !important;
+}
+
+.theme-cics [class*="text-zinc-500"] {
+	color: #44607c !important;
+}
+
+.theme-cics [class*="hover:bg-zinc-800"]:hover,
+.theme-cics [class*="hover:bg-black"]:hover {
+	background-color: var(--cics-navy-2) !important;
+}
+
+.theme-cics .bg-white {
+	background: linear-gradient(180deg, #ffffff 0%, #fafdff 100%);
+	box-shadow: 0 10px 30px rgba(4, 27, 52, 0.08);
+}
+
+.theme-cics .rounded-3xl,
+.theme-cics .rounded-2xl,
+.theme-cics .rounded-xl {
+	backdrop-filter: blur(1.5px);
+}
+
+.theme-cics h1,
+.theme-cics h2,
+.theme-cics h3,
+.theme-cics h4 {
+	letter-spacing: -0.02em;
+}
+
+.theme-cics .text-emerald-600,
+.theme-cics .text-blue-600 {
+	color: var(--cics-blue) !important;
+}
+
+.theme-cics .bg-emerald-50,
+.theme-cics .bg-blue-50 {
+	background-color: #e6f3fb !important;
+}
+
+.theme-cics [class*="shadow-"] {
+	box-shadow: 0 12px 28px rgba(4, 27, 52, 0.1);
+}

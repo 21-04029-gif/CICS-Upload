@@ -142,7 +142,9 @@ service cloud.firestore {
              data.description is string &&
              data.amount is number && data.amount >= 0 &&
              data.source in ['deans_office', 'student_org', 'both'] &&
-             data.status in ['pending', 'paid'] &&
+             data.destination in ['deans_office', 'student_org', 'both'] &&
+             data.status in ['unpaid', 'pending', 'paid'] &&
+             (data.taggingType == null || data.taggingType in ['preset', 'freeText']) &&
              data.createdAt is number;
     }
 
@@ -185,7 +187,9 @@ service cloud.firestore {
     match /liabilities/{liabilityId} {
       allow read: if isAuthenticated() && (request.auth.uid == resource.data.studentUid || request.auth.token.email == resource.data.studentEmail || isDeansOffice() || isStudentOrg() || isAdmin());
       allow create: if (isDeansOffice() || isStudentOrg() || isAdmin()) && isValidLiability(request.resource.data);
-      allow update: if (isDeansOffice() || isStudentOrg() || isAdmin()) && isValidLiability(request.resource.data) || 
+      allow update: if isAdmin() && isValidLiability(request.resource.data) ||
+                      (isDeansOffice() && isValidLiability(request.resource.data)) ||
+                      (isStudentOrg() && isValidLiability(request.resource.data) && (resource.data.destination == 'both' || request.resource.data.destination == 'both')) ||
                       (isAuthenticated() && (request.auth.uid == resource.data.studentUid || request.auth.token.email == resource.data.studentEmail) && request.resource.data.status == 'paid');
       allow delete: if isDeansOffice() || isStudentOrg() || isAdmin();
     }
