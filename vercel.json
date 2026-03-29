@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    {
+      "source": "/payment-success",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/payment-cancel",
+      "destination": "/index.html"
+    }
+  ]
+}
