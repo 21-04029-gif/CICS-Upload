@@ -19,20 +19,21 @@ View your app in AI Studio: https://ai.studio/apps/2f6ca112-61c9-47c0-bdbf-78874
 3. Run the app:
    `npm run dev`
 
-## Deploy to Vercel
+## Deploy
 
 1. Push this repository to GitHub.
-2. In Vercel, import the repository as a new project.
+2. Import the repository into your hosting platform as a new project.
 3. Use these project settings:
    - Framework Preset: `Vite`
    - Build Command: `npm run build`
    - Output Directory: `dist`
 4. Add environment variables from [.env.example](.env.example):
    - `PAYMONGO_SECRET_KEY`
-   - `APP_URL` (set to your Vercel production URL)
+   - `PAYMONGO_WEBHOOK_SECRET` (for webhook signature verification)
+   - `APP_URL` (set to your production URL)
    - `FIREBASE_PROJECT_ID`
    - `FIRESTORE_DATABASE_ID` (if using a non-default database)
    - `FIREBASE_SERVICE_ACCOUNT_KEY` (recommended) or `FIREBASE_CLIENT_EMAIL` + `FIREBASE_PRIVATE_KEY`
 5. Redeploy after saving environment variables.
 
-This project includes serverless API routes under [api/create-checkout-session.ts](api/create-checkout-session.ts), [api/verify-payment.ts](api/verify-payment.ts), [api/paymongo-webhook.ts](api/paymongo-webhook.ts), and [api/health.ts](api/health.ts) for Vercel.
+This project includes serverless API routes under [api/create-checkout-session.ts](api/create-checkout-session.ts), [api/verify-payment.ts](api/verify-payment.ts), [api/paymongo-webhook.ts](api/paymongo-webhook.ts), and [api/health.ts](api/health.ts).

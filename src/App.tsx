@@ -983,13 +983,11 @@ export default function App() {
         isDarkMode && "dark"
       )}>
       <button
+        type="button"
         onClick={() => setIsDarkMode((prev) => !prev)}
-        className={cn(
-          "global-theme-toggle fixed right-4 z-[70] inline-flex h-11 w-11 items-center justify-center rounded-full border transition-all",
-          user ? "top-20 md:top-6" : "top-4 md:top-6"
-        )}
-        title={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
         aria-label={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
+        title={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
+        className="global-theme-toggle fixed right-4 bottom-4 md:top-5 md:right-5 md:bottom-auto z-[60] inline-flex items-center justify-center w-11 h-11 rounded-full border transition-all"
       >
         {isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
       </button>

@@ -347,6 +347,15 @@ body {
 	color: #c3d8ea;
 }
 
+.dashboard-theme-toggle {
+	color: #f4f9ff;
+	background: rgba(255, 255, 255, 0.14);
+	border: 1px solid rgba(255, 255, 255, 0.24);
+}
+
+.dashboard-theme-toggle:hover {
+	background: rgba(255, 255, 255, 0.22);
+}
 
 .theme-cics.dark .dashboard-hero {
 	background:
@@ -392,32 +401,40 @@ body {
 	color: #aac3d9;
 }
 
+.theme-cics.dark .dashboard-theme-toggle {
+	background: rgba(140, 176, 206, 0.18);
+	border-color: rgba(145, 183, 214, 0.34);
+	color: #e8f2fc;
+}
+
+.theme-cics.dark .dashboard-theme-toggle:hover {
+	background: rgba(150, 186, 216, 0.26);
+}
+
 .global-theme-toggle {
-	background: rgba(255, 255, 255, 0.88);
-	border-color: rgba(167, 199, 226, 0.78);
-	color: #11304f;
-	box-shadow: 0 10px 24px rgba(4, 27, 52, 0.2);
-	backdrop-filter: blur(10px);
+	background: rgba(255, 255, 255, 0.9);
+	border-color: #bfd8ec;
+	color: #0f2239;
+	box-shadow: 0 12px 24px rgba(4, 27, 52, 0.2);
+	backdrop-filter: blur(8px);
 }
 
 .global-theme-toggle:hover {
+	background: #ffffff;
+	border-color: #95c2e4;
 	transform: translateY(-1px);
-	background: rgba(245, 251, 255, 0.98);
-	border-color: rgba(126, 173, 208, 0.9);
-	box-shadow: 0 14px 30px rgba(4, 27, 52, 0.26);
 }
 
 .theme-cics.dark .global-theme-toggle {
-	background: rgba(14, 36, 58, 0.86);
-	border-color: rgba(121, 164, 198, 0.58);
-	color: #dcecfb;
-	box-shadow: 0 12px 28px rgba(0, 0, 0, 0.42);
+	background: rgba(13, 32, 51, 0.88);
+	border-color: #396288;
+	color: #e8f2fc;
+	box-shadow: 0 14px 28px rgba(0, 0, 0, 0.38);
 }
 
 .theme-cics.dark .global-theme-toggle:hover {
-	background: rgba(21, 49, 75, 0.94);
-	border-color: rgba(146, 186, 217, 0.68);
-	box-shadow: 0 16px 34px rgba(0, 0, 0, 0.5);
+	background: rgba(22, 46, 70, 0.95);
+	border-color: #4d7599;
 }
 
 .students-directory-panel .students-search-input::placeholder {
