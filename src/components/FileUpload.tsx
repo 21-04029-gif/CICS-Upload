@@ -1,9 +1,10 @@
-import { CheckCircle, File as FileIcon, Loader2, Upload, XCircle } from "lucide-react";
+import { CheckCircle, File as FileIcon, Loader2, Upload, XCircle, X, Eye } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import { cn } from "../utils";
 import { storage } from "../firebase";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
+import { motion, AnimatePresence } from "framer-motion";
 
 interface FileUploadProps {
   uid: string;
@@ -17,6 +18,7 @@ export function FileUpload({ uid, onUploadComplete }: FileUploadProps) {
   const [destination, setDestination] = useState<'deans_office' | 'student_org'>('deans_office');
   const [description, setDescription] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [showFilePreview, setShowFilePreview] = useState(false);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length > 0) {
@@ -38,6 +40,10 @@ export function FileUpload({ uid, onUploadComplete }: FileUploadProps) {
       }
     }
   }, []);
+
+  const isImageFile = (file: File) => {
+    return file.type.startsWith('image/');
+  };
 
   const handleUpload = async () => {
     console.log("Starting upload process...", { selectedFile, description, destination });
@@ -135,6 +141,10 @@ export function FileUpload({ uid, onUploadComplete }: FileUploadProps) {
     }
   } as any);
 
+  const isImageFile = (file: File) => {
+    return file.type.startsWith('image/');
+  };
+
   return (
     <div className="w-full space-y-6">
       <div className="space-y-4">
@@ -191,15 +201,26 @@ export function FileUpload({ uid, onUploadComplete }: FileUploadProps) {
             Support for PDF, DOCX, JPG, PNG (Max 10MB)
           </p>
           {selectedFile && !uploading && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedFile(null);
-              }}
-              className="mt-2 text-[10px] font-bold text-rose-600 uppercase hover:text-rose-700 transition-colors"
-            >
-              Change Selection
-            </button>
+            <div className="flex flex-col gap-2 mt-3">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowFilePreview(true);
+                }}
+                className="text-[10px] font-bold text-blue-600 uppercase hover:text-blue-700 transition-colors"
+              >
+                Preview File
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedFile(null);
+                }}
+                className="text-[10px] font-bold text-rose-600 uppercase hover:text-rose-700 transition-colors"
+              >
+                Change Selection
+              </button>
+            </div>
           )}
         </div>
 
@@ -261,5 +282,79 @@ export function FileUpload({ uid, onUploadComplete }: FileUploadProps) {
         </div>
       )}
     </div>
+
+    {/* File Preview Modal */}
+    <AnimatePresence>
+      {showFilePreview && selectedFile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <motion.div
+            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+            className="bg-white rounded-3xl p-6 md:p-8 w-full max-w-2xl shadow-2xl space-y-4 border border-zinc-100"
+          >
+            <div className="flex items-center justify-between gap-4">
+              <div className="space-y-1 flex-1">
+                <h3 className="text-lg md:text-xl font-bold text-zinc-900">File Preview</h3>
+                <p className="text-xs md:text-sm text-zinc-500">Review your file before uploading</p>
+              </div>
+              <button
+                onClick={() => setShowFilePreview(false)}
+                className="p-2 hover:bg-zinc-100 rounded-lg transition-colors text-zinc-400 hover:text-zinc-600"
+                aria-label="Close preview"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="bg-zinc-50 rounded-2xl border border-zinc-200 p-6 space-y-4">
+              <div className="flex items-start gap-4">
+                <div className="p-3 bg-blue-50 rounded-xl flex-shrink-0">
+                  <FileIcon className="w-6 h-6 text-blue-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-zinc-900 break-words">{selectedFile.name}</p>
+                  <p className="text-xs text-zinc-500 mt-1">
+                    {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
+                  </p>
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    Type: {selectedFile.type || 'Unknown'}
+                  </p>
+                </div>
+              </div>
+
+              {isImageFile(selectedFile) && (
+                <div className="mt-4 pt-4 border-t border-zinc-200">
+                  <p className="text-xs font-semibold text-zinc-600 mb-3 uppercase tracking-wider">Image Preview</p>
+                  <div className="w-full max-h-64 bg-white rounded-xl overflow-hidden border border-zinc-200">
+                    <img
+                      src={URL.createObjectURL(selectedFile)}
+                      alt={selectedFile.name}
+                      className="w-full h-full object-contain"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3 pt-2">
+              <button
+                onClick={() => setShowFilePreview(false)}
+                className="flex-1 px-4 py-3 bg-zinc-100 text-zinc-900 rounded-xl text-sm font-semibold hover:bg-zinc-200 transition-all"
+              >
+                Back
+              </button>
+              <button
+                onClick={() => setShowFilePreview(false)}
+                className="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700 transition-all flex items-center justify-center gap-2"
+              >
+                <CheckCircle className="w-4 h-4" />
+                Looks Good
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
   );
 }

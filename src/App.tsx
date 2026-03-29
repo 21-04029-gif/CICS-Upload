@@ -1650,8 +1650,8 @@ export default function App() {
                           <FileUpload uid={user!.uid} onUploadComplete={handleUploadComplete} />
                         </div>
 
-                        <div className="space-y-6">
-                          <div className="p-8 bg-zinc-900 text-white rounded-[32px] shadow-xl space-y-6">
+                        <div className="space-y-6 flex flex-col">
+                          <div className="flex-1 p-8 bg-zinc-900 text-white rounded-[32px] shadow-xl space-y-6">
                             <h4 className="font-bold text-sm flex items-center gap-2">
                               <ShieldCheck className="w-4 h-4 text-emerald-400" /> Upload Guidelines
                             </h4>
@@ -2510,7 +2510,7 @@ export default function App() {
                               liabilities.filter(l => l.studentEmail === selectedStudentForPreview.email && l.status !== 'paid' && (role === 'admin' || l.destination === role || l.destination === 'both')).map((l) => (
                                 <div key={l.id} className="rounded-lg bg-zinc-50 border border-zinc-100 p-2 flex items-start justify-between gap-2">
                                   <div>
-                                    <p className="text-sm font-bold text-zinc-700">{l.description}</p>
+                                    <p className="text-sm font-bold text-zinc-900 dark:text-zinc-100">{l.description}</p>
                                     <p className="text-xs text-zinc-500">Amount: ₱{l.amount.toLocaleString()}</p>
                                     <p className="text-xs text-zinc-500">Status: {l.status}</p>
                                   </div>
