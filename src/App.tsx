@@ -25,6 +25,8 @@ import {
   Building2,
   Eye,
   ExternalLink,
+  Moon,
+  Sun,
   History as HistoryIcon
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
@@ -143,12 +145,31 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 }
 
 export default function App() {
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    const savedTheme = localStorage.getItem("themeMode");
+    if (savedTheme === "dark") return true;
+    if (savedTheme === "light") return false;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  });
+  const [currentTime, setCurrentTime] = useState(() => new Date());
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     const saved = sessionStorage.getItem('activeTab');
     return (saved as Tab) || 'dashboard';
   });
+
+  useEffect(() => {
+    localStorage.setItem("themeMode", isDarkMode ? "dark" : "light");
+  }, [isDarkMode]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     sessionStorage.setItem('activeTab', activeTab);
@@ -502,8 +523,7 @@ export default function App() {
     "INTESS Membership Fee": 100,
     "JPCS Membership Fee": 150,
     "ACCES Membership Fee": 100,
-    "AXIS Membership Fee": 100,
-    "CICS Membership Fee": 100
+    "CICS Membership Fee": 100,
   };
 
   const addLiability = async (student: UserProfile | null, description: string, amount: number) => {
@@ -958,7 +978,22 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <div className="theme-cics min-h-screen bg-[#F8F9FA] flex flex-col md:flex-row font-sans text-zinc-900 overflow-x-hidden">
+      <div className={cn(
+        "theme-cics min-h-screen bg-[#F8F9FA] flex flex-col md:flex-row font-sans text-zinc-900 overflow-x-hidden",
+        isDarkMode && "dark"
+      )}>
+      <button
+        onClick={() => setIsDarkMode((prev) => !prev)}
+        className={cn(
+          "global-theme-toggle fixed right-4 z-[70] inline-flex h-11 w-11 items-center justify-center rounded-full border transition-all",
+          user ? "top-20 md:top-6" : "top-4 md:top-6"
+        )}
+        title={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
+        aria-label={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
+      >
+        {isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+      </button>
+
       {/* Sidebar - Only show when logged in */}
       {user && (
         <>
@@ -1067,8 +1102,12 @@ export default function App() {
       <main className="flex-1 p-4 md:p-12 overflow-y-auto w-full">
         {!user && !loading ? (
           <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto space-y-6 px-4">
-            <div className="w-20 h-20 bg-zinc-100 rounded-3xl flex items-center justify-center mb-4">
-              <ShieldCheck className="w-10 h-10 text-zinc-400" />
+            <div className="w-24 h-24 bg-white rounded-3xl border border-zinc-200 flex items-center justify-center mb-4 p-2 shadow-sm">
+              <img
+                src="/cics-logo.jpg"
+                alt="CICS Logo"
+                className="w-full h-full rounded-2xl object-cover"
+              />
             </div>
             <div className="space-y-2">
               <h2 className="text-2xl font-bold tracking-tight">Welcome to CICS Portal</h2>
@@ -1127,33 +1166,48 @@ export default function App() {
                   exit={{ opacity: 0, y: -10 }}
                   className="space-y-10 pb-12"
                 >
-                  <header className="relative py-12 px-8 rounded-[40px] bg-zinc-900 text-white overflow-hidden shadow-2xl">
-                    <div className="absolute top-0 right-0 w-96 h-96 bg-white/5 rounded-full -mr-32 -mt-32 blur-3xl animate-pulse" />
-                    <div className="absolute bottom-0 left-0 w-64 h-64 bg-white/5 rounded-full -ml-32 -mb-32 blur-2xl" />
-                    
-                    <div className="relative space-y-4">
-                      <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/10 rounded-full text-[10px] font-bold uppercase tracking-widest backdrop-blur-sm border border-white/10">
-                        <LayoutDashboard className="w-3 h-3" />
-                        <span>System Overview</span>
+                  <header className="dashboard-hero relative rounded-[40px] text-white overflow-hidden shadow-2xl">
+                    <div className="dashboard-hero-orb" />
+                    <div className="dashboard-hero-orb-secondary" />
+
+                    <div className="relative z-10 flex flex-col gap-8 p-8 md:p-10 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="max-w-4xl space-y-5">
+                        <div className="dashboard-hero-kicker inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest">
+                          <LayoutDashboard className="w-3 h-3" />
+                          <span>System Overview</span>
+                        </div>
+                        <div className="space-y-3">
+                          <h1 className="dashboard-hero-title text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight leading-[0.98]">
+                            {(role === 'deans_office' || role === 'student_org') ? (
+                              getTimeGreeting()
+                            ) : (
+                              <>
+                                {getTimeGreeting()}, <span className="dashboard-hero-name">{role === 'student' ? formatNameFirstLetter(user?.displayName?.split(' ')[0]) : (user?.displayName?.split(' ')[0] || 'User')}</span>
+                              </>
+                            )}
+                          </h1>
+                          <p className="dashboard-hero-subtitle text-sm md:text-[clamp(0.86rem,1.05vw,1.08rem)] font-medium leading-tight max-w-none md:whitespace-nowrap">
+                            {role === 'student'
+                              ? "Upload requirements, settle liabilities, and track payment progress in one place."
+                              : role === 'deans_office'
+                              ? "Review submissions, manage liabilities, and verify student transactions with end-to-end control."
+                              : role === 'student_org'
+                              ? "Monitor student submissions, apply liabilities, and validate related payments efficiently."
+                              : "Oversee submissions, transactions, liabilities, and user workflows across the entire CICS portal."}
+                          </p>
+                        </div>
                       </div>
-                      <div className="space-y-2">
-                        <h1 className="text-4xl md:text-5xl font-bold tracking-tight">
-                          {(role === 'deans_office' || role === 'student_org') ? (
-                            getTimeGreeting()
-                          ) : (
-                            <>
-                              {getTimeGreeting()}, <span className="text-zinc-400">{role === 'student' ? formatNameFirstLetter(user?.displayName?.split(' ')[0]) : (user?.displayName?.split(' ')[0] || 'User')}</span>
-                            </>
-                          )}
-                        </h1>
-                        <p className="text-zinc-400 text-base md:text-lg font-light leading-relaxed md:whitespace-nowrap">
-                          {role === 'student'
-                            ? "Upload requirements, settle liabilities, and track payment progress in one place."
-                            : role === 'deans_office'
-                            ? "Review submissions, manage liabilities, and verify student transactions with end-to-end control."
-                            : role === 'student_org'
-                            ? "Monitor student organization submissions, apply liabilities, and validate related payments efficiently."
-                            : "Oversee submissions, transactions, liabilities, and user workflows across the entire CICS portal."}
+
+                      <div className="dashboard-clock-panel rounded-3xl px-4 py-3.5 text-right w-full max-w-[290px] lg:w-[290px] shrink-0">
+                        <div className="dashboard-clock-label flex items-center justify-end gap-2 text-[10px] uppercase tracking-widest">
+                          <Clock className="w-3.5 h-3.5" />
+                          <span>Real-Time Clock</span>
+                        </div>
+                        <p className="dashboard-clock-time text-2xl md:text-[2rem] font-bold tracking-tight leading-tight">
+                          {currentTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                        </p>
+                        <p className="dashboard-clock-date text-xs md:text-sm font-medium">
+                          {currentTime.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: "numeric" })}
                         </p>
                       </div>
                     </div>
@@ -1164,7 +1218,7 @@ export default function App() {
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                         <motion.div 
                           whileHover={{ y: -5 }}
-                          className="p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm hover:shadow-xl hover:border-zinc-900/10 transition-all group"
+                          className="student-stat-card p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm hover:shadow-xl hover:border-zinc-900/10 transition-all group"
                         >
                           <div className="flex items-center justify-between mb-6">
                             <div className="p-3 bg-zinc-50 rounded-2xl group-hover:bg-zinc-900 group-hover:text-white transition-all duration-500">
@@ -1190,7 +1244,7 @@ export default function App() {
 
                         <motion.div 
                           whileHover={{ y: -5 }}
-                          className="p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm hover:shadow-xl hover:border-zinc-900/10 transition-all group"
+                          className="student-stat-card p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm hover:shadow-xl hover:border-zinc-900/10 transition-all group"
                         >
                           <div className="flex items-center justify-between mb-6">
                             <div className={cn(
@@ -1233,10 +1287,10 @@ export default function App() {
 
                         <motion.div 
                           whileHover={{ y: -5 }}
-                          className="p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm hover:shadow-xl hover:border-zinc-900/10 transition-all group"
+                          className="student-stat-card student-reviewing-card p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm hover:shadow-xl hover:border-zinc-900/10 transition-all group"
                         >
                           <div className="flex items-center justify-between mb-6">
-                            <div className="p-3 bg-amber-50 rounded-2xl group-hover:bg-amber-500 group-hover:text-white transition-all duration-500">
+                            <div className="student-reviewing-icon p-3 bg-amber-50 rounded-2xl group-hover:bg-amber-500 group-hover:text-white transition-all duration-500">
                               <Clock className="w-6 h-6" />
                             </div>
                             <div className="text-right">
@@ -1245,13 +1299,13 @@ export default function App() {
                             </div>
                           </div>
                           <div className="space-y-2">
-                            <div className="w-full h-1.5 bg-amber-100 rounded-full overflow-hidden">
+                            <div className="student-reviewing-track w-full h-1.5 bg-amber-100 rounded-full overflow-hidden">
                               <div 
                                 className="h-full bg-amber-500 transition-all duration-1000" 
                                 style={{ width: `${uploads.length > 0 ? (uploads.filter(u => u.status === 'pending_review').length / uploads.length) * 100 : 0}%` }} 
                               />
                             </div>
-                            <p className="text-[10px] text-amber-600 font-medium">
+                            <p className="student-reviewing-label text-[10px] text-amber-600 font-medium">
                               Awaiting Verification
                             </p>
                           </div>
@@ -1345,10 +1399,10 @@ export default function App() {
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                         <motion.div 
                           whileHover={{ y: -5 }}
-                          className="p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm hover:shadow-xl transition-all group"
+                          className="dashboard-stat-card dashboard-stat-card-review p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm hover:shadow-xl transition-all group"
                         >
                           <div className="flex items-center justify-between mb-6">
-                            <div className="p-3 bg-amber-50 rounded-2xl group-hover:bg-amber-500 group-hover:text-white transition-all duration-500">
+                            <div className="dashboard-stat-review-icon p-3 bg-amber-50 rounded-2xl group-hover:bg-amber-500 group-hover:text-white transition-all duration-500">
                               <FileSearch className="w-6 h-6" />
                             </div>
                             <div className="text-right">
@@ -1358,15 +1412,15 @@ export default function App() {
                               </p>
                             </div>
                           </div>
-                          <p className="text-[10px] text-zinc-500 font-medium">Documents awaiting verification</p>
+                          <p className="dashboard-stat-review-label text-[10px] text-zinc-500 font-medium">Documents awaiting verification</p>
                         </motion.div>
 
                         <motion.div 
                           whileHover={{ y: -5 }}
-                          className="p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm hover:shadow-xl transition-all group"
+                          className="dashboard-stat-card p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm hover:shadow-xl transition-all group"
                         >
                           <div className="flex items-center justify-between mb-6">
-                            <div className="p-3 bg-emerald-50 rounded-2xl group-hover:bg-emerald-600 group-hover:text-white transition-all duration-500">
+                            <div className="p-3 bg-zinc-50 rounded-2xl group-hover:bg-zinc-900 group-hover:text-white transition-all duration-500">
                               <CheckCircle2 className="w-6 h-6" />
                             </div>
                             <div className="text-right">
@@ -1376,12 +1430,12 @@ export default function App() {
                               </p>
                             </div>
                           </div>
-                          <p className="text-[10px] text-emerald-600 font-medium">Successfully processed files</p>
+                          <p className="text-[10px] text-zinc-500 font-medium">Successfully processed files</p>
                         </motion.div>
 
                         <motion.div 
                           whileHover={{ y: -5 }}
-                          className="p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm hover:shadow-xl transition-all group"
+                          className="dashboard-stat-card p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm hover:shadow-xl transition-all group"
                         >
                           <div className="flex items-center justify-between mb-6">
                             <div className="p-3 bg-zinc-50 rounded-2xl group-hover:bg-zinc-900 group-hover:text-white transition-all duration-500">
@@ -1480,9 +1534,9 @@ export default function App() {
                   {role === 'admin' && (
                     <div className="space-y-10">
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                        <motion.div whileHover={{ y: -5 }} className="p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm hover:shadow-xl transition-all group">
+                        <motion.div whileHover={{ y: -5 }} className="dashboard-stat-card p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm hover:shadow-xl transition-all group">
                           <div className="flex items-center justify-between mb-6">
-                            <div className="p-3 bg-blue-50 rounded-2xl group-hover:bg-blue-600 group-hover:text-white transition-all duration-500">
+                            <div className="p-3 bg-zinc-50 rounded-2xl group-hover:bg-zinc-900 group-hover:text-white transition-all duration-500">
                               <Building2 className="w-6 h-6" />
                             </div>
                             <div className="text-right">
@@ -1493,9 +1547,9 @@ export default function App() {
                           <p className="text-[10px] text-zinc-500 font-medium">Total submissions</p>
                         </motion.div>
 
-                        <motion.div whileHover={{ y: -5 }} className="p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm hover:shadow-xl transition-all group">
+                        <motion.div whileHover={{ y: -5 }} className="dashboard-stat-card p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm hover:shadow-xl transition-all group">
                           <div className="flex items-center justify-between mb-6">
-                            <div className="p-3 bg-amber-50 rounded-2xl group-hover:bg-amber-500 group-hover:text-white transition-all duration-500">
+                            <div className="p-3 bg-zinc-50 rounded-2xl group-hover:bg-zinc-900 group-hover:text-white transition-all duration-500">
                               <Users className="w-6 h-6" />
                             </div>
                             <div className="text-right">
@@ -1506,9 +1560,9 @@ export default function App() {
                           <p className="text-[10px] text-zinc-500 font-medium">Total submissions</p>
                         </motion.div>
 
-                        <motion.div whileHover={{ y: -5 }} className="p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm hover:shadow-xl transition-all group">
+                        <motion.div whileHover={{ y: -5 }} className="dashboard-stat-card p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm hover:shadow-xl transition-all group">
                           <div className="flex items-center justify-between mb-6">
-                            <div className="p-3 bg-emerald-50 rounded-2xl group-hover:bg-emerald-600 group-hover:text-white transition-all duration-500">
+                            <div className="p-3 bg-zinc-50 rounded-2xl group-hover:bg-zinc-900 group-hover:text-white transition-all duration-500">
                               <Receipt className="w-6 h-6" />
                             </div>
                             <div className="text-right">
@@ -1516,20 +1570,20 @@ export default function App() {
                               <p className="text-3xl font-bold text-zinc-900">₱{allPayments.reduce((acc, p) => acc + p.amount, 0).toLocaleString()}</p>
                             </div>
                           </div>
-                          <p className="text-[10px] text-emerald-600 font-medium">Total collections</p>
+                          <p className="text-[10px] text-zinc-500 font-medium">Total collections</p>
                         </motion.div>
 
-                        <motion.div whileHover={{ y: -5 }} className="p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm hover:shadow-xl transition-all group">
+                        <motion.div whileHover={{ y: -5 }} className="dashboard-stat-card p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm hover:shadow-xl transition-all group">
                           <div className="flex items-center justify-between mb-6">
                             <div className="p-3 bg-zinc-50 rounded-2xl group-hover:bg-zinc-900 group-hover:text-white transition-all duration-500">
                               <CheckCircle2 className="w-6 h-6" />
                             </div>
                             <div className="text-right">
-                              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Approved</p>
+                              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Total Approved</p>
                               <p className="text-3xl font-bold text-zinc-900">{allUploads.filter(u => u.status === 'approved').length}</p>
                             </div>
                           </div>
-                          <p className="text-[10px] text-zinc-500 font-medium">Verified documents</p>
+                          <p className="text-[10px] text-zinc-500 font-medium">Successfully processed files</p>
                         </motion.div>
                       </div>
 
@@ -1541,7 +1595,7 @@ export default function App() {
                           </div>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                          <div className="p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm space-y-4">
+                          <div className="dashboard-stat-card p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm space-y-4">
                             <div className="flex items-center gap-3 text-zinc-400 mb-2">
                               <Users className="w-4 h-4" />
                               <p className="text-[10px] font-bold uppercase tracking-widest">User Base</p>
@@ -1551,7 +1605,7 @@ export default function App() {
                               <p className="text-xs text-zinc-500">Registered students</p>
                             </div>
                           </div>
-                          <div className="p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm space-y-4">
+                          <div className="dashboard-stat-card p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm space-y-4">
                             <div className="flex items-center gap-3 text-zinc-400 mb-2">
                               <Receipt className="w-4 h-4" />
                               <p className="text-[10px] font-bold uppercase tracking-widest">Volume</p>
@@ -1561,14 +1615,14 @@ export default function App() {
                               <p className="text-xs text-zinc-500">Total transactions</p>
                             </div>
                           </div>
-                          <div className="p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm space-y-4">
+                          <div className="dashboard-stat-card dashboard-stat-card-review p-8 bg-white rounded-3xl border border-zinc-200 shadow-sm space-y-4">
                             <div className="flex items-center gap-3 text-zinc-400 mb-2">
                               <FileSearch className="w-4 h-4" />
                               <p className="text-[10px] font-bold uppercase tracking-widest">Backlog</p>
                             </div>
                             <div className="space-y-1">
                               <p className="text-4xl font-bold text-zinc-900">{allUploads.filter(u => u.status === 'pending_review').length}</p>
-                              <p className="text-xs text-zinc-500">Pending reviews</p>
+                              <p className="dashboard-stat-review-label text-xs text-zinc-500">Pending reviews</p>
                             </div>
                           </div>
                         </div>
@@ -2121,7 +2175,15 @@ export default function App() {
               )}
 
               {activeTab === 'students' && (role === 'deans_office' || role === 'student_org' || role === 'admin') && (
-                <motion.div key="students" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-8">
+                <motion.div
+                  key="students"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className={cn(
+                    "space-y-8",
+                    (role === 'deans_office' || role === 'student_org') && "students-directory-panel"
+                  )}
+                >
                   <header className="flex flex-col md:flex-row md:items-end justify-between gap-6">
                     <div className="space-y-2">
                       <div className="flex items-center gap-2 text-zinc-500 text-sm font-medium uppercase tracking-wider">
@@ -2132,18 +2194,18 @@ export default function App() {
                       <p className="text-zinc-500 text-sm">Monitor student liabilities and manage account statuses.</p>
                     </div>
                     <div className="relative w-full md:w-80">
-                      <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                      <Search className="students-search-icon absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
                       <input
                         type="text"
                         placeholder="Search by name or email..."
                         value={studentSearchTerm}
                         onChange={(e) => setStudentSearchTerm(e.target.value)}
-                        className="w-full pl-12 pr-16 py-3 bg-white border border-zinc-200 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all shadow-sm"
+                        className="students-search-input w-full pl-12 pr-16 py-3 bg-white border border-zinc-200 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all shadow-sm"
                       />
                       {studentSearchTerm && (
                         <button
                           onClick={() => setStudentSearchTerm("")}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 rounded-lg transition-all"
+                          className="students-search-clear absolute right-3 top-1/2 -translate-y-1/2 px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 rounded-lg transition-all"
                           aria-label="Clear student search"
                         >
                           Clear
@@ -2159,14 +2221,14 @@ export default function App() {
                           (s.displayName || '').toLowerCase().includes(studentSearchTerm.toLowerCase()) ||
                           (s.email || '').toLowerCase().includes(studentSearchTerm.toLowerCase())
                         ))}
-                        className="px-4 py-2 bg-zinc-100 text-zinc-700 rounded-xl text-xs font-bold hover:bg-zinc-200 transition-all"
+                        className="students-select-all-btn px-4 py-2 bg-zinc-100 text-zinc-700 rounded-xl text-xs font-bold hover:bg-zinc-200 transition-all"
                       >
                         Select All Filtered
                       </button>
                       <button
                         onClick={() => setIsBulkLiabilityModalOpen(true)}
                         disabled={selectedStudentUids.length === 0}
-                        className="px-4 py-2 bg-zinc-900 text-white rounded-xl text-xs font-bold hover:bg-zinc-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="students-bulk-liability-btn px-4 py-2 bg-zinc-900 text-white rounded-xl text-xs font-bold hover:bg-zinc-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         Apply Liability to Selected ({selectedStudentUids.length})
                       </button>
@@ -2175,9 +2237,9 @@ export default function App() {
 
                   <div className="space-y-4">
                     {/* Desktop Table View */}
-                    <div className="hidden md:block bg-white rounded-3xl border border-zinc-200 overflow-hidden shadow-sm">
-                      <table className="w-full text-left text-sm min-w-[800px]">
-                        <thead className="bg-zinc-50/50 border-b border-zinc-100">
+                    <div className="students-directory-table-shell hidden md:block bg-white rounded-3xl border border-zinc-200 overflow-hidden shadow-sm">
+                      <table className="students-directory-table w-full text-left text-sm min-w-[800px]">
+                        <thead className="students-directory-table-head bg-zinc-50/50 border-b border-zinc-100">
                           <tr>
                             {(role === 'deans_office' || role === 'student_org') && (
                               <th className="px-6 py-4 text-[10px] font-bold text-zinc-400 uppercase tracking-widest">
@@ -2212,7 +2274,7 @@ export default function App() {
                             .map(student => {
                             return (
                               <React.Fragment key={student.uid}>
-                                <tr className="hover:bg-zinc-50/30 transition-colors">
+                                <tr className="students-directory-row hover:bg-zinc-50/30 transition-colors">
                                   {(role === 'deans_office' || role === 'student_org') && (
                                     <td className="px-6 py-5">
                                       <input
@@ -2256,7 +2318,7 @@ export default function App() {
                     </div>
 
                     {/* Mobile Card View */}
-                    <div className="md:hidden space-y-4">
+                    <div className="students-directory-mobile md:hidden space-y-4">
                       {allStudents
                         .filter(s => 
                           (s.displayName || '').toLowerCase().includes(studentSearchTerm.toLowerCase()) ||
@@ -2272,7 +2334,7 @@ export default function App() {
                           .map(student => {
                           const studentLiabilities = liabilities.filter(l => l.studentEmail === student.email && (l.status === 'pending' || l.status === 'pending_validation'));
                           return (
-                            <div key={student.uid} className="p-6 bg-white rounded-2xl border border-zinc-200 shadow-sm space-y-4">
+                            <div key={student.uid} className="students-directory-mobile-card p-6 bg-white rounded-2xl border border-zinc-200 shadow-sm space-y-4">
                               {(role === 'deans_office' || role === 'student_org') && (
                                 <div className="flex justify-end">
                                   <input
@@ -2351,7 +2413,7 @@ export default function App() {
                                   }}
                                   className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
                                 >
-                                  <option value="other">Other (Free Text)</option>
+                                  <option value="other">Others</option>
                                   {Object.keys(MEMBERSHIP_FEES).map(fee => (
                                     <option key={fee} value={fee}>{fee}</option>
                                   ))}
@@ -2365,9 +2427,7 @@ export default function App() {
                                   type="text"
                                   value={liabilityDesc}
                                   onChange={(e) => setLiabilityDesc(e.target.value)}
-                                  placeholder="e.g. Unreturned Library Book"
-                                  className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
-                                />
+                                  className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"/>
                               </div>
                             )}
 

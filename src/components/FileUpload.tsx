@@ -149,7 +149,7 @@ export function FileUpload({ uid, onUploadComplete }: FileUploadProps) {
             )}
           >
             <span className="text-sm font-semibold text-zinc-900">Dean's Office</span>
-            <span className="text-xs text-zinc-500 mt-1">Academic & Official Documents</span>
+            <span className="text-xs text-zinc-500 mt-1">Official Documents</span>
           </button>
           <button
             type="button"
