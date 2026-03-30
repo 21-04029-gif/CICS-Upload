@@ -35,11 +35,11 @@ export interface PaymentTransaction {
   studentName?: string;
   fileId?: string;
   liabilityId?: string;
-  destination: 'Deans_Office' | 'Student_Org' | 'Both';
+  destination: 'deans_office' | 'student_org' | 'both' | 'Deans_Office' | 'Student_Org' | 'Both';
   amount: number;
   currency: string;
   purpose: string;
-  status: 'Pending' | 'Paid' | 'Failed';
+  status: 'pending' | 'completed' | 'failed' | 'Pending' | 'Paid' | 'Failed';
   paymentSessionId: string;
   createdAt: number;
 }
@@ -51,8 +51,9 @@ export interface Liability {
   studentName?: string;
   description: string;
   amount: number;
-  source: 'Deans_Office' | 'Student_Org' | 'Both';
-  status: 'Pending' | 'Paid';
-  taggingType: 'Preset' | 'FreeText';
+  source: 'deans_office' | 'student_org' | 'both';
+  destination: 'deans_office' | 'student_org' | 'both';
+  status: 'unpaid' | 'pending' | 'pending_validation' | 'paid';
+  taggingType: 'preset' | 'freeText';
   createdAt: number;
 }

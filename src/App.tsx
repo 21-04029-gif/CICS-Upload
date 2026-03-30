@@ -1,5 +1,5 @@
 import { onAuthStateChanged, User } from "firebase/auth";
-import { addDoc, collection, onSnapshot, orderBy, query, where, doc, getDoc, setDoc, updateDoc, deleteDoc, getDocs } from "firebase/firestore";
+import { addDoc, collection, onSnapshot, orderBy, query, where, doc, getDoc, setDoc, updateDoc, deleteDoc, getDocs, writeBatch } from "firebase/firestore";
 import { ref, deleteObject } from "firebase/storage";
 import { 
   LayoutDashboard, 
@@ -311,11 +311,117 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // Migration function to fix old PascalCase liability data format
+  useEffect(() => {
+    if (role !== 'admin' || !db) return;
+    
+    const migrateOldLiabilities = async () => {
+      try {
+        // Check for liabilities with old PascalCase format or missing studentUid
+        const liabilitiesSnapshot = await getDocs(collection(db, "liabilities"));
+        const studentsSnapshot = await getDocs(collection(db, "users"));
+        
+        // Create email -> uid mapping for quick lookup
+        const emailToUid = new Map<string, string>();
+        studentsSnapshot.docs.forEach(doc => {
+          const data = doc.data() as any;
+          if (data.email) {
+            emailToUid.set(data.email.toLowerCase(), doc.id);
+          }
+        });
+        
+        console.log("📋 Liability Migration: Starting check...");
+        console.log("📊 Found mappings for", emailToUid.size, "students");
+        
+        const batch = writeBatch(db);
+        let migrationCount = 0;
+        let missingUidCount = 0;
+        const liabilitiesToUpdate: any[] = [];
+        
+        liabilitiesSnapshot.docs.forEach(doc => {
+          const data = doc.data() as any;
+          const updates: any = {};
+          let needsUpdate = false;
+          
+          // Add missing studentUid
+          if (!data.studentUid && data.studentEmail) {
+            const uid = emailToUid.get(data.studentEmail.toLowerCase());
+            if (uid) {
+              updates.studentUid = uid;
+              needsUpdate = true;
+              missingUidCount++;
+              liabilitiesToUpdate.push({
+                description: data.description,
+                email: data.studentEmail,
+                uid: uid,
+                status: data.status
+              });
+              console.log(`✏️ Will add studentUid for ${data.description} (${data.studentEmail})`);
+            }
+          }
+          
+          // Migrate source field
+          if (data.source === 'Deans_Office' || data.source === 'Student_Org' || data.source === 'Both') {
+            updates.source = data.source === 'Deans_Office' ? 'deans_office' : 
+                           data.source === 'Student_Org' ? 'student_org' : 'both';
+            needsUpdate = true;
+          }
+          
+          // Migrate status field
+          if (data.status === 'Pending') {
+            updates.status = 'unpaid';
+            needsUpdate = true;
+          } else if (data.status === 'Paid') {
+            updates.status = 'paid';
+            needsUpdate = true;
+          }
+          
+          // Migrate taggingType field
+          if (data.taggingType === 'Preset' || data.taggingType === 'FreeText') { 
+            updates.taggingType = data.taggingType === 'Preset' ? 'preset' : 'freeText';
+            needsUpdate = true;
+          }
+          
+          // Ensure destination field exists (copy from source if missing)
+          if (!data.destination && data.source) {
+            updates.destination = updates.source || (data.source === 'Deans_Office' ? 'deans_office' : 
+                                data.source === 'Student_Org' ? 'student_org' : 
+                                data.source === 'Both' ? 'both' : data.source);
+            needsUpdate = true;
+          }
+          
+          if (needsUpdate) {
+            batch.update(doc.ref, updates);
+            migrationCount++;
+          }
+        });
+        
+        if (migrationCount > 0) {
+          await batch.commit();
+          console.log(`✅ Migrated ${migrationCount} liabilities (${missingUidCount} added missing studentUid)`);
+          console.log("📝 Updated liabilities:", liabilitiesToUpdate);
+        } else {
+          console.log(`✓ All ${liabilitiesSnapshot.docs.length} liabilities already in current format`);
+        }
+      } catch (error) {
+        console.error("❌ Error during liability migration:", error);
+      }
+    };
+    
+    migrateOldLiabilities();
+  }, [role, db]);
+
   useEffect(() => {
     if (!user || !role) return;
 
     // Student specific queries
     if (role === 'student') {
+      console.log("📌 Student User Info:", {
+        uid: user.uid,
+        email: user.email,
+        displayName: user.displayName
+      });
+
       const uploadsQuery = query(
         collection(db, "uploads"),
         where("uid", "==", user.uid),
@@ -332,6 +438,13 @@ export default function App() {
         orderBy("createdAt", "desc")
       );
 
+      // Also query by email as a fallback
+      const studentLiabilitiesEmailQuery = query(
+        collection(db, "liabilities"),
+        where("studentEmail", "==", user.email),
+        orderBy("createdAt", "desc")
+      );
+
       const unsubUploads = onSnapshot(uploadsQuery, (snapshot) => {
         console.log("Student Uploads fetched:", snapshot.docs.length);
         setUploads(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as FileUploadType)));
@@ -342,15 +455,50 @@ export default function App() {
         setPayments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as PaymentTransaction)));
       }, (error) => handleFirestoreError(error, OperationType.GET, "payments"));
 
+      // Track results from both queries
+      let uidBasedResults: Liability[] = [];
+      let emailBasedResults: Liability[] = [];
+      
+      const updateLiabilities = () => {
+        // Simple deduplication: combine both results, keeping uid-based results where they exist
+        const combined = [...uidBasedResults];
+        emailBasedResults.forEach(email => {
+          if (!combined.find(uid => uid.id === email.id)) {
+            combined.push(email);
+          }
+        });
+        console.log("📊 Final merged liabilities:", combined.length);
+        setLiabilities(combined);
+      };
+
       const unsubStudentLiabilities = onSnapshot(studentLiabilitiesQuery, (snapshot) => {
-        console.log("Student Liabilities fetched:", snapshot.docs.length);
-        setLiabilities(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Liability)));
+        uidBasedResults = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Liability));
+        console.log("📦 Student Liabilities (by uid) fetched:", uidBasedResults.length);
+        updateLiabilities();
       }, (error) => handleFirestoreError(error, OperationType.GET, "liabilities"));
+
+      // Fallback: Also listen to email-based query to catch liabilities that might not have studentUid
+      const unsubStudentLiabilitiesEmail = onSnapshot(studentLiabilitiesEmailQuery, (snapshot) => {
+        emailBasedResults = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Liability));
+        console.log("📦 Student Liabilities (by email) fetched:", emailBasedResults.length);
+        
+        if (emailBasedResults.length > 0) {
+          console.log("✅ Found liabilities by email!");
+          emailBasedResults.forEach((liability, idx) => {
+            console.log(`  ${idx + 1}. ${(liability as any).description} - ₱${(liability as any).amount} (${(liability as any).status})`);
+          });
+        }
+        
+        updateLiabilities();
+      }, (error) => {
+        console.warn("⚠️ Email-based liability query failed:", error);
+      });
 
       return () => { 
         unsubUploads(); 
         unsubPayments(); 
-        unsubStudentLiabilities();
+        unsubStudentLiabilities(); 
+        unsubStudentLiabilitiesEmail();
       };
     }
 
@@ -484,7 +632,7 @@ export default function App() {
   const initiateLiabilityPayment = async (liability: Liability) => {
     try {
       // Determine payment destination based on tagging type
-      const paymentDestination = (liability.taggingType === 'Preset' || (liability.taggingType as unknown as string) === 'preset') ? 'both' : 'deans_office';
+      const paymentDestination = liability.taggingType === 'preset' ? 'both' : 'deans_office';
       
       const response = await fetch("/api/create-checkout-session", {
         method: "POST",
@@ -501,7 +649,20 @@ export default function App() {
           origin: window.location.origin
         }),
       });
-      const data = await response.json();
+
+      let data: any = null;
+      try {
+        data = await response.json();
+      } catch {
+        if (!response.ok) {
+          throw new Error(`Payment server error (${response.status})`);
+        }
+      }
+
+      if (!response.ok) {
+        throw new Error(data?.error || `Payment server error (${response.status})`);
+      }
+
       if (data.id && data.url) {
         // Store session ID and liability ID before redirecting to PayMongo
         sessionStorage.setItem('paymentSessionId', data.id);
@@ -511,9 +672,9 @@ export default function App() {
       } else {
         setPaymentResult({ success: false, message: data.error || "Failed to initiate payment. Please try again." });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Liability payment initiation failed:", error);
-      setPaymentResult({ success: false, message: "Could not connect to payment server. Please check your connection." });
+      setPaymentResult({ success: false, message: error?.message || "Could not connect to payment server. Please check your connection." });
     }
   };
 
@@ -524,6 +685,20 @@ export default function App() {
     "JPCS Membership Fee": 150,
     "ACCES Membership Fee": 100,
     "CICS Membership Fee": 100,
+  };
+
+  const canRoleValidateLiability = (liability: Liability) => {
+    if (!role) return false;
+    if (role === 'admin') return true;
+    if (role === 'deans_office') {
+      return liability.destination === 'deans_office' || liability.destination === 'both';
+    }
+    if (role === 'student_org') {
+      // Student Org can only validate dropdown liabilities routed to them.
+      return (liability.taggingType === 'preset' || (liability.taggingType as unknown as string) === 'Preset') &&
+        (liability.destination === 'student_org' || liability.destination === 'both');
+    }
+    return false;
   };
 
   const addLiability = async (student: UserProfile | null, description: string, amount: number) => {
@@ -538,6 +713,12 @@ export default function App() {
     setIsAddingLiability(true);
     try {
       const isMembershipFee = description in MEMBERSHIP_FEES;
+
+      if (role === 'student_org' && !isMembershipFee) {
+        setPaymentResult({ success: false, message: "Student Org can only assign liabilities from the dropdown list." });
+        return;
+      }
+
       const currentSource = isMembershipFee ? 'both' : (role === 'admin' ? 'deans_office' : role);
       const taggingType = isMembershipFee ? 'preset' : 'freeText';
       
@@ -694,6 +875,12 @@ export default function App() {
     setIsAddingLiability(true);
     try {
       const isMembershipFee = description in MEMBERSHIP_FEES;
+
+      if (role === 'student_org' && !isMembershipFee) {
+        setPaymentResult({ success: false, message: "Student Org can only assign liabilities from the dropdown list." });
+        return;
+      }
+
       const currentSource = isMembershipFee ? 'both' : (role === 'admin' ? 'deans_office' : role);
       const taggingType = isMembershipFee ? 'preset' : 'freeText';
 
@@ -757,6 +944,12 @@ export default function App() {
 
   const markLiabilityAsPaid = async (liabilityId: string) => {
     try {
+      const liability = liabilities.find(l => l.id === liabilityId);
+      if (!liability || !canRoleValidateLiability(liability)) {
+        setPaymentResult({ success: false, message: "You do not have permission to validate this payment." });
+        return;
+      }
+
       await updateDoc(doc(db, "liabilities", liabilityId), { 
         status: 'paid',
         updatedAt: Date.now()
@@ -825,11 +1018,17 @@ export default function App() {
       // If user is not yet loaded, wait for the next effect run
       if (!user) return;
 
+      const normalizeCheckoutSessionId = (value: string | null) => {
+        const raw = (value || '').trim();
+        if (!raw || raw.includes('{CHECKOUT_SESSION_ID}')) return '';
+        return raw.startsWith('cs_') ? raw : `cs_${raw}`;
+      };
+
       // Get session ID from sessionStorage or URL params
-      let sessionId = sessionStorage.getItem('paymentSessionId');
+      let sessionId = normalizeCheckoutSessionId(sessionStorage.getItem('paymentSessionId'));
       if (!sessionId) {
         const params = new URLSearchParams(window.location.search);
-        sessionId = params.get('session_id');
+        sessionId = normalizeCheckoutSessionId(params.get('session_id'));
       }
 
       // If we've already started processing this session, don't do it again
@@ -1247,21 +1446,21 @@ export default function App() {
                           <div className="flex items-center justify-between mb-6">
                             <div className={cn(
                               "p-3 rounded-2xl transition-all duration-500",
-                              liabilities.filter(l => l.status === 'unpaid' || l.status === 'pending').length > 0 
-                                ? (liabilities.some(l => l.status === 'pending') ? "bg-amber-50 text-amber-600 group-hover:bg-amber-600 group-hover:text-white" : "bg-rose-50 text-rose-600 group-hover:bg-rose-600 group-hover:text-white")
+                              liabilities.filter(l => l.studentEmail === user?.email && (l.status === 'unpaid' || l.status === 'pending' || (l.status as unknown as string) === 'Pending')).length > 0 
+                                ? (liabilities.some(l => l.studentEmail === user?.email && (l.status === 'pending' || (l.status as unknown as string) === 'Pending')) ? "bg-amber-50 text-amber-600 group-hover:bg-amber-600 group-hover:text-white" : "bg-rose-50 text-rose-600 group-hover:bg-rose-600 group-hover:text-white")
                                 : "bg-emerald-50 text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white"
                             )}>
-                              {liabilities.filter(l => l.status === 'unpaid' || l.status === 'pending').length > 0 ? <AlertCircle className="w-6 h-6" /> : <CheckCircle2 className="w-6 h-6" />}
+                              {liabilities.filter(l => l.studentEmail === user?.email && (l.status === 'unpaid' || l.status === 'pending' || (l.status as unknown as string) === 'Pending')).length > 0 ? <AlertCircle className="w-6 h-6" /> : <CheckCircle2 className="w-6 h-6" />}
                             </div>
                             <div className="text-right">
                               <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Liabilities</p>
                               <p className={cn(
                                 "text-3xl font-bold",
-                                liabilities.filter(l => l.status === 'unpaid' || l.status === 'pending').length > 0 
-                                  ? (liabilities.some(l => l.status === 'pending') ? "text-amber-600" : "text-rose-600") 
+                                liabilities.filter(l => l.studentEmail === user?.email && (l.status === 'unpaid' || l.status === 'pending' || (l.status as unknown as string) === 'Pending')).length > 0 
+                                  ? (liabilities.some(l => l.studentEmail === user?.email && (l.status === 'pending' || (l.status as unknown as string) === 'Pending')) ? "text-amber-600" : "text-rose-600") 
                                   : "text-emerald-600"
                               )}>
-                                {liabilities.filter(l => l.status === 'unpaid' || l.status === 'pending').length > 0 ? (liabilities.every(l => l.status === 'pending') ? "Pending" : "Due") : "Clear"}
+                                {liabilities.filter(l => l.studentEmail === user?.email && (l.status === 'unpaid' || l.status === 'pending' || (l.status as unknown as string) === 'Pending')).length > 0 ? (liabilities.every(l => !l.studentEmail || l.studentEmail !== user?.email || (l.status === 'pending' || (l.status as unknown as string) === 'Pending')) ? "Pending" : "Due") : "Clear"}
                               </p>
                             </div>
                           </div>
@@ -1270,15 +1469,15 @@ export default function App() {
                               <div 
                                 className={cn(
                                   "h-full transition-all duration-1000",
-                                  liabilities.filter(l => l.status === 'pending' || l.status === 'pending_validation').length > 0 
-                                    ? (liabilities.some(l => l.status === 'pending_validation') ? "bg-amber-600" : "bg-rose-600") 
+                                  liabilities.filter(l => l.studentEmail === user?.email && (l.status === 'pending' || l.status === 'pending_validation')).length > 0 
+                                    ? (liabilities.some(l => l.studentEmail === user?.email && l.status === 'pending_validation') ? "bg-amber-600" : "bg-rose-600") 
                                     : "bg-emerald-600"
                                 )}
-                                style={{ width: `${liabilities.filter(l => l.status === 'unpaid' || l.status === 'pending').length > 0 ? 100 : 0}%` }} 
+                                style={{ width: `${liabilities.filter(l => l.studentEmail === user?.email && (l.status === 'unpaid' || l.status === 'pending' || (l.status as unknown as string) === 'Pending')).length > 0 ? 100 : 0}%` }} 
                               />
                             </div>
                             <p className="text-[10px] text-zinc-500 font-medium">
-                              {liabilities.filter(l => l.status === 'unpaid' || l.status === 'pending').length} outstanding liabilities
+                              {liabilities.filter(l => l.studentEmail === user?.email && (l.status === 'unpaid' || l.status === 'pending' || (l.status as unknown as string) === 'Pending')).length} outstanding liabilities
                             </p>
                           </div>
                         </motion.div>
@@ -1706,7 +1905,7 @@ export default function App() {
                           </h3>
                         </div>
                         <div className="grid gap-4">
-                          {liabilities.filter(l => l.status === 'unpaid' || l.status === 'pending' || l.status === 'pending_validation').length === 0 ? (
+                          {liabilities.filter(l => l.studentEmail === user?.email && (l.status === 'unpaid' || l.status === 'pending' || l.status === 'pending_validation' || (l.status as unknown as string) === 'Pending')).length === 0 ? (
                             <div className="p-16 bg-white rounded-[40px] border border-dashed border-zinc-200 text-center space-y-4 shadow-sm">
                               <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mx-auto">
                                 <CheckCircle2 className="w-8 h-8 text-emerald-500" />
@@ -1717,7 +1916,7 @@ export default function App() {
                               </div>
                             </div>
                           ) : (
-                            liabilities.filter(l => l.status === 'unpaid' || l.status === 'pending' || l.status === 'pending_validation').map(l => (
+                            liabilities.filter(l => l.studentEmail === user?.email && (l.status === 'unpaid' || l.status === 'pending' || l.status === 'pending_validation' || (l.status as unknown as string) === 'Pending')).map(l => (
                               <motion.div 
                                 key={l.id} 
                                 whileHover={{ scale: 1.01 }}
@@ -1727,21 +1926,21 @@ export default function App() {
                                   <div className="flex items-center gap-3">
                                     <div className={cn(
                                       "p-2 rounded-xl",
-                                      l.source === 'student_org' ? "bg-blue-50 text-blue-600" : "bg-rose-50 text-rose-600"
+                                      (l.source === 'student_org' || (l.source as unknown as string) === 'Student_Org') ? "bg-blue-50 text-blue-600" : "bg-rose-50 text-rose-600"
                                     )}>
                                       <Building2 className="w-5 h-5" />
                                     </div>
                                     <div className="space-y-0.5">
                                       <div className="flex items-center gap-2">
                                         <h3 className="font-bold text-zinc-900 text-lg">{l.description}</h3>
-                                        {(l.status === 'pending' || l.status === 'pending_validation' || payments.some(p => p.liabilityId === l.id && p.status === 'completed')) && (
+                                        {(l.status === 'pending' || l.status === 'pending_validation' || (l.status as unknown as string) === 'Pending' || payments.some(p => p.liabilityId === l.id && p.status === 'completed')) && (
                                           <span className="px-2 py-0.5 rounded-lg text-[8px] font-bold uppercase tracking-widest bg-amber-50 text-amber-600 border border-amber-100">
                                             Pending
                                           </span>
                                         )}
                                       </div>
                                       <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">
-                                        {l.source === 'student_org' ? "Student Organization" : "Dean's Office"}
+                                        {(l.source === 'student_org' || (l.source as unknown as string) === 'Student_Org') ? "Student Organization" : "Dean's Office"}
                                       </span>
                                     </div>
                                   </div>
@@ -1828,17 +2027,17 @@ export default function App() {
                         <div className="space-y-2 relative">
                           <p className="text-zinc-500 text-[10px] font-bold uppercase tracking-widest">Total Liabilities</p>
                           <h3 className="text-5xl font-bold tracking-tight">
-                            ₱{liabilities.filter(l => l.status === 'pending' || l.status === 'pending_validation').reduce((acc, l) => acc + l.amount, 0).toLocaleString()}
+                            ₱{liabilities.filter(l => l.studentEmail === user?.email && (l.status === 'unpaid' || l.status === 'pending' || l.status === 'pending_validation' || (l.status as unknown as string) === 'Pending')).reduce((acc, l) => acc + l.amount, 0).toLocaleString()}
                           </h3>
                         </div>
                         <div className="pt-8 border-t border-white/10 space-y-4 relative">
                           <div className="flex justify-between items-center">
                             <span className="text-zinc-400 text-sm">Dean's Office</span>
-                            <span className="font-bold text-lg">₱{liabilities.filter(l => (l.status === 'pending' || l.status === 'pending_validation') && l.source === 'deans_office').reduce((acc, l) => acc + l.amount, 0).toLocaleString()}</span>
+                            <span className="font-bold text-lg">₱{liabilities.filter(l => l.studentEmail === user?.email && (l.status === 'unpaid' || l.status === 'pending' || l.status === 'pending_validation' || (l.status as unknown as string) === 'Pending') && (l.source === 'deans_office' || (l.source as unknown as string) === 'Deans_Office')).reduce((acc, l) => acc + l.amount, 0).toLocaleString()}</span>
                           </div>
                           <div className="flex justify-between items-center">
                             <span className="text-zinc-400 text-sm">Student Org</span>
-                            <span className="font-bold text-lg">₱{liabilities.filter(l => (l.status === 'pending' || l.status === 'pending_validation') && l.source === 'student_org').reduce((acc, l) => acc + l.amount, 0).toLocaleString()}</span>
+                            <span className="font-bold text-lg">₱{liabilities.filter(l => l.studentEmail === user?.email && (l.status === 'unpaid' || l.status === 'pending' || l.status === 'pending_validation' || (l.status as unknown as string) === 'Pending') && (l.source === 'student_org' || (l.source as unknown as string) === 'Student_Org')).reduce((acc, l) => acc + l.amount, 0).toLocaleString()}</span>
                           </div>
                         </div>
                       </div>
@@ -2566,6 +2765,7 @@ export default function App() {
                     <div className="space-y-4">
                       {liabilities.filter(l => l.status === 'pending' && (role === 'admin' || l.destination === role || l.destination === 'both')).map(liability => {
                         const payment = allPayments.find(p => p.liabilityId === liability.id && p.status === 'pending');
+                        const canApprove = canRoleValidateLiability(liability);
                         return (
                           <motion.div
                             key={liability.id}
@@ -2601,34 +2801,22 @@ export default function App() {
                                 )}
                               </div>
                             </div>
-                            <button
-                              onClick={async () => {
-                                try {
-                                  await updateDoc(doc(db, "liabilities", liability.id), {
-                                    status: "paid"
-                                  });
-                                  if (payment) {
-                                    const paymentRef = collection(db, "payments");
-                                    const q = query(paymentRef, where("paymentSessionId", "==", payment.paymentSessionId));
-                                    const snapshot = await getDocs(q);
-                                    snapshot.forEach(async (docSnapshot) => {
-                                      await updateDoc(doc(db, "payments", docSnapshot.id), {
-                                        status: "completed",
-                                        approvedAt: Date.now(),
-                                        approvedBy: user?.email
-                                      });
-                                    });
+                            {canApprove && (
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    await markLiabilityAsPaid(liability.id);
+                                    setPaymentResult({ success: true, message: `Liability approved for ${liability.studentName}` });
+                                  } catch (error) {
+                                    console.error("Error approving liability:", error);
+                                    setPaymentResult({ success: false, message: "Failed to approve liability" });
                                   }
-                                  setPaymentResult({ success: true, message: `Liability approved for ${liability.studentName}` });
-                                } catch (error) {
-                                  console.error("Error approving liability:", error);
-                                  setPaymentResult({ success: false, message: "Failed to approve liability" });
-                                }
-                              }}
-                              className="px-8 py-4 bg-emerald-600 text-white rounded-2xl text-sm font-bold hover:bg-emerald-700 hover:shadow-lg active:scale-95 transition-all whitespace-nowrap"
-                            >
-                              ✓ Approve Payment
-                            </button>
+                                }}
+                                className="px-8 py-4 bg-emerald-600 text-white rounded-2xl text-sm font-bold hover:bg-emerald-700 hover:shadow-lg active:scale-95 transition-all whitespace-nowrap"
+                              >
+                                ✓ Approve Payment
+                              </button>
+                            )}
                           </motion.div>
                         );
                       })}
@@ -2650,7 +2838,7 @@ export default function App() {
                     <div className="flex items-center justify-between">
                       <p className="text-zinc-500 text-sm">View and track all student payments and revenue.</p>
                       <div className="flex items-center gap-3">
-                        {(role === 'admin' || role === 'deans_office' || role === 'student_org') && allPayments.some(p => p.status === 'pending') && (
+                        {role === 'admin' && allPayments.some(p => p.status === 'pending') && (
                           <button
                             onClick={deletePendingTransactions}
                             className="px-4 py-2 bg-rose-50 text-rose-600 rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-rose-600 hover:text-white transition-all flex items-center gap-2"
@@ -2706,6 +2894,7 @@ export default function App() {
                           ).map(p => {
                             const associatedLiability = liabilities.find(l => l.id === p.liabilityId);
                             const isLiabilityAwaitingValidation = associatedLiability && associatedLiability.status === 'pending_validation';
+                            const canValidate = associatedLiability ? canRoleValidateLiability(associatedLiability) : false;
                             
                             return (
                               <tr key={p.id} className="hover:bg-zinc-50/30 transition-colors">
@@ -2736,7 +2925,7 @@ export default function App() {
                                     </span>
                                     
                                     {/* Staff validation button for completed payments awaiting verification */}
-                                    {p.status === 'completed' && isLiabilityAwaitingValidation && role !== 'student' && (
+                                    {p.status === 'completed' && isLiabilityAwaitingValidation && role !== 'student' && canValidate && (
                                       <button
                                         onClick={() => markLiabilityAsPaid(p.liabilityId!)}
                                         className="px-2 py-1 rounded-lg text-[9px] font-bold uppercase tracking-widest bg-zinc-900 text-white hover:bg-zinc-800 transition-all shadow-sm"
@@ -2779,6 +2968,7 @@ export default function App() {
                       ).map(p => {
                         const associatedLiability = liabilities.find(l => l.id === p.liabilityId);
                         const isLiabilityAwaitingValidation = associatedLiability && associatedLiability.status === 'pending_validation';
+                        const canValidate = associatedLiability ? canRoleValidateLiability(associatedLiability) : false;
                         
                         return (
                           <div key={p.id} className="p-6 space-y-4">
@@ -2805,7 +2995,7 @@ export default function App() {
                                   )}>
                                     {p.status === 'completed' ? 'Validated' : (p.status === 'pending' ? 'Pending' : (p.status || 'Failed'))}
                                   </span>
-                                  {p.status === 'completed' && isLiabilityAwaitingValidation && role !== 'student' && (
+                                  {p.status === 'completed' && isLiabilityAwaitingValidation && role !== 'student' && canValidate && (
                                     <button
                                       onClick={() => markLiabilityAsPaid(p.liabilityId!)}
                                       className="px-2 py-0.5 rounded-lg text-[9px] font-bold uppercase tracking-widest bg-zinc-900 text-white"

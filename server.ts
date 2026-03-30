@@ -133,8 +133,8 @@ async function startServer() {
                 },
               ],
               payment_method_types: ["card", "gcash", "paymaya"],
-              success_url: `${origin || process.env.APP_URL || "http://localhost:3000"}/payment-success`,
-              cancel_url: `${origin || process.env.APP_URL || "http://localhost:3000"}/payment-cancel`,
+              success_url: `${origin || process.env.APP_URL || "http://localhost:3000"}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+              cancel_url: `${origin || process.env.APP_URL || "http://localhost:3000"}/payment-cancel?session_id={CHECKOUT_SESSION_ID}`,
               description: `Liability Payment for: ${fileName}`,
               metadata: {
                 liabilityId: liabilityId || "",

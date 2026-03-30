@@ -129,10 +129,20 @@ service cloud.firestore {
 
     function isValidPayment(data) {
       return data.uid is string &&
-             data.destination in ['deans_office', 'student_org'] &&
+             data.destination in ['deans_office', 'student_org', 'both', 'Deans_Office', 'Student_Org', 'Both'] &&
              data.amount is number && data.amount >= 0 &&
              data.status in ['pending', 'completed', 'failed'] &&
              data.createdAt is number;
+    }
+
+    function isPaymentManagedByRole(payment) {
+      return (isDeansOffice() && payment.destination in ['deans_office', 'both', 'Deans_Office', 'Both']) ||
+             (isStudentOrg() && payment.destination in ['student_org', 'both', 'Student_Org', 'Both']);
+    }
+
+    function isAllowedPaymentStatusTransition() {
+      return resource.data.status in ['pending', 'Pending'] &&
+             request.resource.data.status in ['completed', 'Completed'];
     }
 
     function isValidLiability(data) {
@@ -180,7 +190,14 @@ service cloud.firestore {
     match /payments/{paymentId} {
       allow read: if isAuthenticated() && (isDocOwner() || request.auth.token.email == resource.data.studentEmail || isDeansOffice() || isStudentOrg() || isAdmin());
       allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid && isValidPayment(request.resource.data);
-      allow update: if isAdmin();
+      allow update: if isAdmin() ||
+                    (isAuthenticated() &&
+                     isPaymentManagedByRole(resource.data) &&
+                     isAllowedPaymentStatusTransition() &&
+                     request.resource.data.uid == resource.data.uid &&
+                     request.resource.data.amount == resource.data.amount &&
+                     request.resource.data.destination == resource.data.destination &&
+                     request.resource.data.createdAt == resource.data.createdAt);
       allow delete: if isAdmin();
     }
 

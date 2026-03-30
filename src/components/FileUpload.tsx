@@ -1,5 +1,5 @@
-import { CheckCircle, File as FileIcon, Loader2, Upload, XCircle, X } from "lucide-react";
-import { useCallback, useState } from "react";
+import { CheckCircle, Loader2, Upload, XCircle, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import { cn } from "../utils";
 import { storage } from "../firebase";
@@ -19,13 +19,84 @@ export function FileUpload({ uid, onUploadComplete }: FileUploadProps) {
   const [description, setDescription] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [showFilePreview, setShowFilePreview] = useState(false);
+  const [pendingUpload, setPendingUpload] = useState<{
+    name: string;
+    url: string;
+    size: number;
+    type: string;
+    destination: 'deans_office' | 'student_org';
+  } | null>(null);
+
+  const previewUrl = useMemo(() => {
+    if (!selectedFile) return "";
+    return URL.createObjectURL(selectedFile);
+  }, [selectedFile]);
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  }, [previewUrl]);
+
+  const startAutoUpload = useCallback((file: File, targetDestination: 'deans_office' | 'student_org') => {
+    setUploading(true);
+    setProgress(0);
+    setError(null);
+    setPendingUpload(null);
+
+    const storagePath = `uploads/${targetDestination}/${uid}/${Date.now()}_${file.name}`;
+    const storageRef = ref(storage, storagePath);
+    const uploadTask = uploadBytesResumable(storageRef, file);
+
+    uploadTask.on(
+      "state_changed",
+      (snapshot) => {
+        const nextProgress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+        setProgress(nextProgress);
+      },
+      (uploadError) => {
+        let message = "Upload failed. Please try again.";
+
+        if (!window.navigator.onLine) {
+          message = "Network error: Please check your internet connection.";
+        } else if (uploadError?.code === "storage/unauthorized") {
+          message = "Permission denied: You don't have access to upload files.";
+        } else if (uploadError?.code === "storage/retry-limit-exceeded") {
+          message = "Upload timed out. Please try again with a better connection.";
+        } else if (uploadError?.code === "storage/canceled") {
+          message = "Upload was canceled.";
+        } else if (String(uploadError?.message || "").includes("network")) {
+          message = "Network error during upload. Please check your connection.";
+        }
+
+        setError(message);
+        setUploading(false);
+      },
+      async () => {
+        const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+        setPendingUpload({
+          name: file.name,
+          url: downloadURL,
+          size: file.size,
+          type: file.type,
+          destination: targetDestination,
+        });
+        setProgress(100);
+        setUploading(false);
+      }
+    );
+  }, [uid]);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length > 0) {
-      setSelectedFile(acceptedFiles[0]);
+      const file = acceptedFiles[0];
+      setSelectedFile(file);
       setError(null);
+      startAutoUpload(file, destination);
     }
-  }, []);
+  }, [destination, startAutoUpload]);
 
   const onDropRejected = useCallback((fileRejections: any) => {
     const rejection = fileRejections[0];
@@ -46,13 +117,12 @@ export function FileUpload({ uid, onUploadComplete }: FileUploadProps) {
   };
 
   const handleUpload = async () => {
-    console.log("Starting upload process...", { selectedFile, description, destination });
     if (!selectedFile) {
       setError("Please select a file first.");
       return;
     }
-    if (selectedFile.size > 10 * 1024 * 1024) {
-      setError("File size exceeds 10MB limit.");
+    if (!pendingUpload) {
+      setError("Please wait for the file upload to finish.");
       return;
     }
     if (!description.trim()) {
@@ -60,70 +130,20 @@ export function FileUpload({ uid, onUploadComplete }: FileUploadProps) {
       return;
     }
 
-    setUploading(true);
-    setError(null);
+    onUploadComplete({
+      name: pendingUpload.name,
+      url: pendingUpload.url,
+      size: pendingUpload.size,
+      type: pendingUpload.type,
+      destination: pendingUpload.destination,
+      description: description.trim()
+    });
+
+    setSelectedFile(null);
+    setPendingUpload(null);
+    setDescription("");
     setProgress(0);
-
-    try {
-      const storagePath = `uploads/${destination}/${uid}/${Date.now()}_${selectedFile.name}`;
-      console.log("Storage path:", storagePath);
-      const storageRef = ref(storage, storagePath);
-      const uploadTask = uploadBytesResumable(storageRef, selectedFile);
-
-      uploadTask.on(
-        "state_changed",
-        (snapshot) => {
-          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-          setProgress(progress);
-          console.log(`Upload progress: ${progress}%`);
-        },
-        (error) => {
-          console.error("Firebase Storage Upload error:", error);
-          let message = "Upload failed. Please try again.";
-          
-          if (!window.navigator.onLine) {
-            message = "Network error: Please check your internet connection.";
-          } else if (error.code === 'storage/unauthorized') {
-            message = "Permission denied: You don't have access to upload files.";
-          } else if (error.code === 'storage/retry-limit-exceeded') {
-            message = "Upload timed out. Please try again with a better connection.";
-          } else if (error.code === 'storage/canceled') {
-            message = "Upload was canceled.";
-          } else if (error.message.includes('network')) {
-            message = "Network error during upload. Please check your connection.";
-          } else {
-            message = `Upload failed: ${error.message}`;
-          }
-          
-          setError(message);
-          setUploading(false);
-        },
-        async () => {
-          console.log("Upload successful, getting download URL...");
-          const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-          console.log("Download URL obtained:", downloadURL);
-          
-          onUploadComplete({
-            name: selectedFile.name,
-            url: downloadURL,
-            size: selectedFile.size,
-            type: selectedFile.type,
-            destination: destination,
-            description: description.trim()
-          });
-          
-          setProgress(100);
-          setUploading(false);
-          setSelectedFile(null);
-          setDescription("");
-          console.log("Upload process complete.");
-        }
-      );
-    } catch (err: any) {
-      console.error("Catch block upload error:", err);
-      setError(err.message || "Upload failed. Please try again.");
-      setUploading(false);
-    }
+    setError(null);
   };
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -211,6 +231,9 @@ export function FileUpload({ uid, onUploadComplete }: FileUploadProps) {
                 onClick={(e) => {
                   e.stopPropagation();
                   setSelectedFile(null);
+                  setPendingUpload(null);
+                  setProgress(0);
+                  setError(null);
                 }}
                 className="text-[10px] font-bold text-rose-600 uppercase hover:text-rose-700 transition-colors"
               >
@@ -250,17 +273,27 @@ export function FileUpload({ uid, onUploadComplete }: FileUploadProps) {
 
         <button
           onClick={handleUpload}
-          disabled={uploading || !selectedFile || !description.trim()}
+          disabled={uploading || !selectedFile || !pendingUpload || !description.trim()}
           className={cn(
             "w-full py-3 rounded-xl font-medium text-white transition-all flex items-center justify-center gap-2 shadow-sm",
             "bg-zinc-900 hover:bg-zinc-800",
-            (uploading || !selectedFile || !description.trim()) && "opacity-50 cursor-not-allowed"
+            (uploading || !selectedFile || !pendingUpload || !description.trim()) && "opacity-50 cursor-not-allowed"
           )}
         >
           {uploading ? (
             <>
               <Loader2 className="w-4 h-4 animate-spin" />
               Uploading...
+            </>
+          ) : !pendingUpload && selectedFile ? (
+            <>
+              <Loader2 className="w-4 h-4" />
+              Waiting for upload...
+            </>
+          ) : selectedFile && pendingUpload && !description.trim() ? (
+            <>
+              <CheckCircle className="w-4 h-4" />
+              Confirm Upload
             </>
           ) : (
             <>
@@ -269,6 +302,12 @@ export function FileUpload({ uid, onUploadComplete }: FileUploadProps) {
             </>
           )}
         </button>
+
+        {selectedFile && pendingUpload && !uploading && (
+          <p className="text-xs text-zinc-500">
+            File uploaded in background. Add a description, then click Confirm Upload.
+          </p>
+        )}
       </div>
 
       {error && (
@@ -281,93 +320,49 @@ export function FileUpload({ uid, onUploadComplete }: FileUploadProps) {
       {/* File Preview Modal */}
       <AnimatePresence>
         {showFilePreview && selectedFile && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
             <motion.div
-              initial={{ opacity: 0, y: 10, scale: 0.95 }}
+              initial={{ opacity: 0, y: 10, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 10, scale: 0.95 }}
-              className="theme-cics bg-white dark:bg-[#122538] rounded-3xl p-6 md:p-8 w-full max-w-4xl shadow-2xl space-y-4 border border-zinc-200 dark:border-[#27435f] max-h-[90vh] overflow-y-auto"
+              exit={{ opacity: 0, y: 10, scale: 0.98 }}
+              className="bg-white rounded-3xl p-4 md:p-6 w-full max-w-5xl shadow-2xl space-y-4 border border-zinc-100"
             >
               <div className="flex items-center justify-between gap-4">
-                <div className="space-y-1 flex-1">
-                  <h3 className="text-lg md:text-xl font-bold text-zinc-900 dark:text-zinc-100">File Preview</h3>
-                  <p className="text-xs md:text-sm text-zinc-500 dark:text-zinc-400">Review your file before uploading</p>
+                <div>
+                  <h3 className="text-xl font-bold text-zinc-900">File Preview</h3>
+                  <p className="text-sm text-zinc-500 truncate max-w-[70vw]">{selectedFile.name}</p>
                 </div>
                 <button
                   onClick={() => setShowFilePreview(false)}
-                  className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
+                  className="p-2 hover:bg-zinc-100 rounded-lg transition-colors"
                   aria-label="Close preview"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
 
-              <div className="bg-zinc-50 dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 p-6 space-y-6">
-                {/* File Info */}
-                <div className="space-y-4">
-                  <p className="text-xs font-semibold text-zinc-600 dark:text-zinc-400 uppercase tracking-wider">File Information</p>
-                  <div className="flex items-start gap-4">
-                    <div className="p-3 bg-blue-50 dark:bg-blue-900/30 rounded-xl flex-shrink-0">
-                      <FileIcon className="w-6 h-6 text-blue-600 dark:text-blue-400" />
-                    </div>
-                    <div className="flex-1 min-w-0 space-y-2">
-                      <p className="font-semibold text-zinc-900 dark:text-zinc-100 break-words text-sm md:text-base">{selectedFile.name}</p>
-                      <div className="grid grid-cols-2 gap-4 text-xs">
-                        <div>
-                          <p className="text-zinc-500 dark:text-zinc-400">Size</p>
-                          <p className="font-semibold text-zinc-900 dark:text-zinc-100">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB</p>
-                        </div>
-                        <div>
-                          <p className="text-zinc-500 dark:text-zinc-400">Type</p>
-                          <p className="font-semibold text-zinc-900 dark:text-zinc-100">{selectedFile.type || 'Unknown'}</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* File Preview */}
+              <div className="w-full h-[70vh] bg-zinc-50 rounded-2xl border border-zinc-200 overflow-hidden">
                 {isImageFile(selectedFile) ? (
-                  <div className="space-y-3">
-                    <p className="text-xs font-semibold text-zinc-600 dark:text-zinc-400 uppercase tracking-wider">Image Preview</p>
-                    <div className="w-full bg-white dark:bg-zinc-800 rounded-xl overflow-hidden border border-zinc-200 dark:border-zinc-700">
-                      <img
-                        src={URL.createObjectURL(selectedFile)}
-                        alt={selectedFile.name}
-                        className="w-full h-auto max-h-96 object-contain"
-                      />
-                    </div>
-                  </div>
+                  <img
+                    src={previewUrl}
+                    alt={selectedFile.name}
+                    className="w-full h-full object-contain bg-white"
+                  />
                 ) : (
-                  <div className="space-y-3">
-                    <p className="text-xs font-semibold text-zinc-600 dark:text-zinc-400 uppercase tracking-wider">File Preview</p>
-                    <div className="w-full bg-white dark:bg-zinc-800 rounded-xl overflow-hidden border border-zinc-200 dark:border-zinc-700 p-6 flex flex-col items-center justify-center min-h-96 text-center">
-                      <div className="p-4 bg-zinc-100 dark:bg-zinc-700 rounded-2xl mb-4">
-                        <FileIcon className="w-12 h-12 text-zinc-400 dark:text-zinc-500" />
-                      </div>
-                      <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 mb-2">{selectedFile.name}</p>
-                      <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                        Document preview not available. Click Looks Good to confirm and upload.
-                      </p>
-                    </div>
-                  </div>
+                  <iframe
+                    src={previewUrl}
+                    title={selectedFile.name}
+                    className="w-full h-full"
+                  />
                 )}
               </div>
 
-              {/* Action Buttons */}
-              <div className="flex flex-col sm:flex-row gap-3 pt-2">
+              <div className="flex justify-end pt-1">
                 <button
                   onClick={() => setShowFilePreview(false)}
-                  className="flex-1 px-4 py-3 bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded-xl text-sm font-semibold hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-all"
+                  className="px-4 py-2 bg-zinc-900 text-white rounded-xl text-sm font-semibold hover:bg-zinc-800 transition-all"
                 >
-                  Back
-                </button>
-                <button
-                  onClick={() => setShowFilePreview(false)}
-                  className="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700 transition-all flex items-center justify-center gap-2"
-                >
-                  <CheckCircle className="w-4 h-4" />
-                  Looks Good
+                  Close
                 </button>
               </div>
             </motion.div>
