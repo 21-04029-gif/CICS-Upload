@@ -9,7 +9,13 @@ if (!admin.apps.length) {
     admin.initializeApp();
 }
 const FIRESTORE_DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || "ai-studio-2f6ca112-61c9-47c0-bdbf-78874120c2d6";
-const db = getFirestore(admin.app(), FIRESTORE_DATABASE_ID);
+let db = null;
+const getDb = () => {
+    if (!db) {
+        db = getFirestore(admin.app(), FIRESTORE_DATABASE_ID);
+    }
+    return db;
+};
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -136,6 +142,45 @@ const createCheckoutSession = async (req, res) => {
 };
 app.post("/create-checkout-session", createCheckoutSession);
 app.post("/api/create-checkout-session", createCheckoutSession);
+const verifyRecaptcha = async (req, res) => {
+    const RECAPTCHA_SECRET_KEY = process.env.RECAPTCHA_SECRET_KEY || "";
+    const token = String(req.body?.token || "").trim();
+    if (!token) {
+        return res.status(400).json({ success: false, error: "Missing reCAPTCHA token" });
+    }
+    if (!RECAPTCHA_SECRET_KEY) {
+        return res.status(500).json({
+            success: false,
+            error: "reCAPTCHA server verification is not configured",
+            code: "recaptcha_not_configured",
+        });
+    }
+    try {
+        const params = new URLSearchParams({
+            secret: RECAPTCHA_SECRET_KEY,
+            response: token,
+        });
+        const response = await axios.post("https://www.google.com/recaptcha/api/siteverify", params.toString(), {
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            timeout: 10000,
+        });
+        const success = Boolean(response.data?.success);
+        if (!success) {
+            return res.status(403).json({
+                success: false,
+                error: "reCAPTCHA verification failed",
+                details: response.data?.["error-codes"] || [],
+            });
+        }
+        return res.json({ success: true });
+    }
+    catch (error) {
+        const detail = error?.message || "reCAPTCHA verification failed";
+        return res.status(500).json({ success: false, error: detail });
+    }
+};
+app.post("/verify-recaptcha", verifyRecaptcha);
+app.post("/api/verify-recaptcha", verifyRecaptcha);
 const verifyPayment = async (req, res) => {
     const PAYMONGO_SECRET_KEY = process.env.PAYMONGO_SECRET_KEY || "";
     if (!PAYMONGO_SECRET_KEY) {
@@ -187,13 +232,13 @@ const verifyPayment = async (req, res) => {
             const liabilityId = String(metadata.liabilityId || "");
             const destination = String(metadata.destination || "deans_office");
             const paymentAmount = Number(metadata.amount || 0);
-            const existingPaymentSnap = await db
+            const existingPaymentSnap = await getDb()
                 .collection("payments")
                 .where("paymentSessionId", "==", resolvedSessionId)
                 .limit(1)
                 .get();
             if (existingPaymentSnap.empty) {
-                await db.collection("payments").add({
+                await getDb().collection("payments").add({
                     uid: metadata.uid || null,
                     studentEmail: metadata.studentEmail || null,
                     studentName: metadata.studentName || null,
@@ -215,7 +260,7 @@ const verifyPayment = async (req, res) => {
                 });
             }
             if (liabilityId) {
-                const liabilityRef = db.collection("liabilities").doc(liabilityId);
+                const liabilityRef = getDb().collection("liabilities").doc(liabilityId);
                 const liabilityDoc = await liabilityRef.get();
                 if (liabilityDoc.exists) {
                     await liabilityRef.update({

@@ -18,7 +18,6 @@ import {
   Receipt,
   RotateCcw,
   X,
-  Menu,
   Trash2,
   Search,
   Inbox,
@@ -145,6 +144,7 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 }
 
 export default function App() {
+  const recaptchaSiteKey = (import.meta.env.VITE_RECAPTCHA_SITE_KEY as string | undefined) || "";
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const savedTheme = localStorage.getItem("themeMode");
     if (savedTheme === "dark") return true;
@@ -189,7 +189,6 @@ export default function App() {
   const [liabilityType, setLiabilityType] = useState<string>("other");
   const [liabilityAmount, setLiabilityAmount] = useState("");
   const [authError, setAuthError] = useState<string | null>(null);
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [rejectionFileId, setRejectionFileId] = useState<string | null>(null);
   const [rejectionComment, setRejectionComment] = useState("");
   const [previewFile, setPreviewFile] = useState<FileUploadType | null>(null);
@@ -1160,12 +1159,11 @@ export default function App() {
       <button
         onClick={() => {
           setActiveTab(id);
-          setIsMobileMenuOpen(false);
         }}
         className={cn(
-          "flex items-center gap-3 px-4 py-3 rounded-xl transition-all w-full text-left font-medium",
+          "app-nav-item flex items-center gap-3 px-4 py-3 rounded-xl transition-all w-full text-left font-medium",
           activeTab === id 
-            ? "bg-zinc-900 text-white shadow-md shadow-zinc-200" 
+            ? "app-nav-item-active bg-zinc-900 text-white shadow-md shadow-zinc-200" 
             : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
         )}
       >
@@ -1178,7 +1176,7 @@ export default function App() {
   return (
     <ErrorBoundary>
       <div className={cn(
-        "theme-cics min-h-screen bg-[#F8F9FA] flex flex-col md:flex-row font-sans text-zinc-900 overflow-x-hidden",
+        "app-shell theme-cics min-h-screen bg-[#F8F9FA] flex flex-col md:flex-row font-sans text-zinc-900 overflow-x-hidden",
         isDarkMode && "dark"
       )}>
       <button
@@ -1194,43 +1192,11 @@ export default function App() {
       {/* Sidebar - Only show when logged in */}
       {user && (
         <>
-          {/* Mobile Header */}
-          <div className="md:hidden flex items-center justify-between p-4 bg-white border-b border-zinc-200 sticky top-0 z-50">
-            <div className="flex items-center gap-2">
-              <img
-                src="/cics-logo.jpg"
-                alt="CICS Logo"
-                className="w-8 h-8 rounded-lg object-cover"
-              />
-              <h1 className="text-sm font-bold tracking-tight">CICS Portal</h1>
-            </div>
-            <button 
-              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="p-2 hover:bg-zinc-100 rounded-lg transition-colors"
-            >
-              {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-            </button>
-          </div>
-
-          {/* Sidebar Overlay */}
-          <AnimatePresence>
-            {isMobileMenuOpen && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                onClick={() => setIsMobileMenuOpen(false)}
-                className="fixed inset-0 bg-black/20 backdrop-blur-sm z-40 md:hidden"
-              />
-            )}
-          </AnimatePresence>
-
           {/* Sidebar */}
           <aside className={cn(
-            "fixed inset-y-0 left-0 z-50 w-72 bg-white border-r border-zinc-200 p-6 flex flex-col gap-8 transition-transform duration-300 ease-in-out md:relative md:translate-x-0 md:z-0",
-            isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
+            "app-sidebar relative z-0 bg-white border-r border-zinc-200 p-6 flex flex-col gap-8 md:shrink-0 w-full md:w-72"
           )}>
-            <div className="hidden md:flex items-center gap-3 px-2">
+            <div className="flex items-center gap-3 px-2">
               <img
                 src="/cics-logo.jpg"
                 alt="CICS Logo"
@@ -1242,7 +1208,7 @@ export default function App() {
               </div>
             </div>
 
-            <nav className="flex-1 space-y-2 overflow-y-auto">
+            <nav className="app-nav flex-1 space-y-2 overflow-y-auto">
             <NavItem id="dashboard" icon={LayoutDashboard} label="Dashboard" />
             
             {/* Student Tabs */}
@@ -1296,32 +1262,54 @@ export default function App() {
       )}
 
       {/* Main Content */}
-      <main className="flex-1 p-4 md:p-12 overflow-y-auto w-full">
+      <main className="app-main flex-1 p-4 md:p-12 overflow-y-auto w-full">
         {!user && !loading ? (
-          <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto space-y-6 px-4">
-            <div className="w-24 h-24 bg-white rounded-3xl border border-zinc-200 flex items-center justify-center mb-4 p-2 shadow-sm">
-              <img
-                src="/cics-logo.jpg"
-                alt="CICS Logo"
-                className="w-full h-full rounded-2xl object-cover"
-              />
-            </div>
-            <div className="space-y-2">
-              <h2 className="text-2xl font-bold tracking-tight">Welcome to CICS Portal</h2>
-              <p className="text-zinc-500 text-sm leading-relaxed">
-                Please sign in with your institutional Google account (Student Email) to access file uploads, payments, and departmental services.
-              </p>
-            </div>
-            {authError && (
-              <div className="p-4 bg-rose-50 border border-rose-100 rounded-xl flex items-center gap-3 text-rose-600 text-sm animate-in fade-in slide-in-from-top-2">
-                <AlertCircle className="w-5 h-5 flex-shrink-0" />
-                <p>{authError}</p>
+          <section className="auth-stage min-h-[calc(100vh-5rem)] flex items-center justify-center">
+            <div className="auth-shell w-full max-w-5xl grid grid-cols-1 lg:grid-cols-2 overflow-hidden rounded-[28px] border border-zinc-200">
+              <div className="auth-visual relative p-8 md:p-10 flex items-center justify-center min-h-[260px] lg:min-h-[560px]">
+                <div className="auth-visual-logo rounded-[36px] bg-white/10 border border-white/25 shadow-2xl p-4 backdrop-blur-sm">
+                  <img src="/cics-logo.jpg" alt="CICS Logo" className="w-full h-full rounded-[28px] object-cover" />
+                </div>
               </div>
-            )}
-            <Auth user={user} loading={loading} onLoginStart={() => setAuthError(null)} />
-          </div>
+
+              <div className="auth-form-panel p-8 md:p-10 lg:p-12 flex flex-col justify-center">
+                <div className="auth-form-content space-y-6 max-w-md mx-auto w-full">
+                  <div className="auth-copy space-y-2">
+                    <h2 className="auth-title text-3xl font-bold tracking-tight">Welcome back</h2>
+                      <p className="auth-subtitle auth-subtitle-singleline text-zinc-500 text-sm leading-relaxed">
+                        Continue with your institutional Google account to access the CICS Portal.
+                    </p>
+                  </div>
+
+                  {authError && (
+                    <div className="p-4 bg-rose-50 border border-rose-100 rounded-xl flex items-center gap-3 text-rose-600 text-sm animate-in fade-in slide-in-from-top-2">
+                      <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                      <p>{authError}</p>
+                    </div>
+                  )}
+
+                  <div className="space-y-4">
+                    <p className="auth-terms auth-terms-singleline text-[11px] text-zinc-500">
+                      By continuing, you agree to use this system with your official university account.
+                    </p>
+                    <Auth
+                      user={user}
+                      loading={loading}
+                      onLoginStart={() => setAuthError(null)}
+                      recaptchaEnabled={true}
+                      recaptchaSiteKey={recaptchaSiteKey}
+                    />
+                    <div className="auth-meta flex items-center justify-center lg:justify-start gap-2 text-[11px] text-zinc-500">
+                      <span className="auth-meta-dot" />
+                      <span>Protected by Google Authentication</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
         ) : (
-          <div className="w-full max-w-7xl mx-auto space-y-10">
+          <div className="app-content w-full max-w-7xl mx-auto space-y-10">
             <AnimatePresence>
         {paymentResult && (
           <motion.div 
@@ -1395,15 +1383,15 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="dashboard-clock-panel rounded-3xl px-4 py-3.5 text-right w-full max-w-[290px] lg:w-[290px] shrink-0">
-                        <div className="dashboard-clock-label flex items-center justify-end gap-2 text-[10px] uppercase tracking-widest">
+                      <div className="dashboard-clock-panel rounded-3xl px-4 py-3 text-right w-fit max-w-full shrink-0 ml-auto">
+                        <div className="dashboard-clock-label flex items-center justify-end gap-2 text-[9px] sm:text-[10px] uppercase tracking-widest whitespace-nowrap">
                           <Clock className="w-3.5 h-3.5" />
                           <span>Real-Time Clock</span>
                         </div>
-                        <p className="dashboard-clock-time text-2xl md:text-[2rem] font-bold tracking-tight leading-tight">
+                        <p className="dashboard-clock-time text-[clamp(1.55rem,5vw,2rem)] font-bold tracking-tight leading-tight whitespace-nowrap">
                           {currentTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                         </p>
-                        <p className="dashboard-clock-date text-xs md:text-sm font-medium">
+                        <p className="dashboard-clock-date text-[11px] sm:text-sm font-medium whitespace-nowrap">
                           {currentTime.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: "numeric" })}
                         </p>
                       </div>
@@ -1552,7 +1540,7 @@ export default function App() {
                             </div>
                             <button 
                               onClick={() => setActiveTab('history')} 
-                              className="px-4 py-2 rounded-xl bg-zinc-50 text-[10px] font-bold text-zinc-500 hover:bg-zinc-900 hover:text-white uppercase tracking-widest transition-all"
+                              className="px-4 py-2 rounded-xl bg-zinc-900 text-[10px] font-bold text-white hover:bg-black uppercase tracking-widest transition-all"
                             >
                               View History
                             </button>
@@ -1688,7 +1676,7 @@ export default function App() {
                               <h3 className="text-lg font-bold text-zinc-900">Recent Submissions</h3>
                               <p className="text-xs text-zinc-500 font-medium">Latest files from students</p>
                             </div>
-                            <button onClick={() => setActiveTab('review')} className="px-4 py-2 rounded-xl bg-zinc-50 text-[10px] font-bold text-zinc-500 hover:bg-zinc-900 hover:text-white uppercase tracking-widest transition-all">Review All</button>
+                            <button onClick={() => setActiveTab('review')} className="px-4 py-2 rounded-xl bg-zinc-900 text-[10px] font-bold text-white hover:bg-black uppercase tracking-widest transition-all">Review All</button>
                           </div>
                           <div className="space-y-4">
                             {allUploads.filter(u => u.destination === role).slice(0, 4).map((upload) => (
@@ -1837,9 +1825,9 @@ export default function App() {
                           <span>File Submission</span>
                         </div>
                         <h2 className="text-3xl font-bold tracking-tight text-zinc-900">Upload Documents</h2>
-                        <p className="text-zinc-500 text-sm">Submit your assignments or thesis documents. Note: Payment is only required for Student Org submissions.</p>
+                        <p className="text-zinc-500 text-sm">Submit yourdocuments. Note: Payment is only required for Student Org submissions.</p>
                       </header>
-                      
+
                       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                         <div className="lg:col-span-2 p-10 bg-white rounded-[40px] border border-zinc-200 shadow-sm space-y-8">
                           <div className="space-y-2">
@@ -1850,22 +1838,36 @@ export default function App() {
                         </div>
 
                         <div className="space-y-6 flex flex-col">
-                          <div className="flex-1 p-8 bg-zinc-900 text-white rounded-[32px] shadow-xl space-y-6">
-                            <h4 className="font-bold text-sm flex items-center gap-2">
-                              <ShieldCheck className="w-4 h-4 text-emerald-400" /> Upload Guidelines
-                            </h4>
+                          <div className="p-8 bg-zinc-900 text-white rounded-[32px] shadow-xl space-y-6">
+                            <div className="space-y-2">
+                              <h4 className="font-bold text-base flex items-center gap-2">
+                                <ShieldCheck className="w-4 h-4 text-emerald-400" /> Upload Guidelines
+                              </h4>
+                              <p className="text-xs text-zinc-200/90 leading-relaxed">
+                                Follow this checklist to avoid rejected submissions and processing delays.
+                              </p>
+                            </div>
+
                             <ul className="space-y-4">
                               <li className="flex gap-3">
-                                <div className="w-5 h-5 rounded-full bg-white/10 flex items-center justify-center shrink-0 text-[10px] font-bold">1</div>
-                                <p className="text-xs text-zinc-400 leading-relaxed">Ensure your file name is clear and descriptive (e.g., Thesis_Draft_V1.pdf).</p>
+                                <div className="w-6 h-6 rounded-full bg-white/10 border border-white/20 flex items-center justify-center shrink-0 text-[10px] font-bold">1</div>
+                                <p className="text-sm text-zinc-100/90 leading-relaxed">Use a clear filename format like <span className="font-semibold text-white">Surname_DocumentType.pdf</span>.</p>
                               </li>
                               <li className="flex gap-3">
-                                <div className="w-5 h-5 rounded-full bg-white/10 flex items-center justify-center shrink-0 text-[10px] font-bold">2</div>
-                                <p className="text-xs text-zinc-400 leading-relaxed">Select the correct destination (Dean's Office or Student Org) during upload.</p>
+                                <div className="w-6 h-6 rounded-full bg-white/10 border border-white/20 flex items-center justify-center shrink-0 text-[10px] font-bold">2</div>
+                                <p className="text-sm text-zinc-100/90 leading-relaxed">Double-check file type and size before uploading. Only supported formats will be accepted.</p>
                               </li>
                               <li className="flex gap-3">
-                                <div className="w-5 h-5 rounded-full bg-white/10 flex items-center justify-center shrink-0 text-[10px] font-bold">3</div>
-                                <p className="text-xs text-zinc-400 leading-relaxed">Wait for the progress bar to complete before navigating away.</p>
+                                <div className="w-6 h-6 rounded-full bg-white/10 border border-white/20 flex items-center justify-center shrink-0 text-[10px] font-bold">3</div>
+                                <p className="text-sm text-zinc-100/90 leading-relaxed">Choose the correct destination: <span className="font-semibold text-white">Dean's Office</span> or <span className="font-semibold text-white">Student Org</span>.</p>
+                              </li>
+                              <li className="flex gap-3">
+                                <div className="w-6 h-6 rounded-full bg-white/10 border border-white/20 flex items-center justify-center shrink-0 text-[10px] font-bold">4</div>
+                                <p className="text-sm text-zinc-100/90 leading-relaxed">Wait until the upload reaches <span className="font-semibold text-white">100%</span> and a success confirmation appears.</p>
+                              </li>
+                              <li className="flex gap-3">
+                                <div className="w-6 h-6 rounded-full bg-white/10 border border-white/20 flex items-center justify-center shrink-0 text-[10px] font-bold">5</div>
+                                <p className="text-sm text-zinc-100/90 leading-relaxed">After submission, monitor updates in <span className="font-semibold text-white">File Status</span> for approval or rejection notes.</p>
                               </li>
                             </ul>
                           </div>

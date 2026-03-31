@@ -76,6 +76,7 @@ const app = express();
 const PORT = 3000;
 
 const PAYMONGO_SECRET_KEY = process.env.PAYMONGO_SECRET_KEY || "";
+const RECAPTCHA_SECRET_KEY = process.env.RECAPTCHA_SECRET_KEY || "";
 const authHeader = `Basic ${Buffer.from(PAYMONGO_SECRET_KEY + ":").toString("base64")}`;
 
 async function startServer() {
@@ -99,6 +100,54 @@ async function startServer() {
       res.json({ status: "ok", firestore: "connected", timestamp: new Date().toISOString() });
     } catch (error: any) {
       res.status(500).json({ status: "error", message: error.message });
+    }
+  });
+
+  // Server-side reCAPTCHA verification
+  app.post("/api/verify-recaptcha", async (req, res) => {
+    const token = String(req.body?.token || "").trim();
+
+    if (!token) {
+      return res.status(400).json({ success: false, error: "Missing reCAPTCHA token" });
+    }
+
+    if (!RECAPTCHA_SECRET_KEY) {
+      return res.status(500).json({
+        success: false,
+        error: "reCAPTCHA server verification is not configured",
+        code: "recaptcha_not_configured",
+      });
+    }
+
+    try {
+      const params = new URLSearchParams({
+        secret: RECAPTCHA_SECRET_KEY,
+        response: token,
+      });
+
+      const verifyResponse = await axios.post(
+        "https://www.google.com/recaptcha/api/siteverify",
+        params.toString(),
+        {
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          timeout: 10000,
+        }
+      );
+
+      if (!verifyResponse.data?.success) {
+        return res.status(403).json({
+          success: false,
+          error: "reCAPTCHA verification failed",
+          details: verifyResponse.data?.["error-codes"] || [],
+        });
+      }
+
+      return res.json({ success: true });
+    } catch (error: any) {
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "reCAPTCHA verification failed",
+      });
     }
   });
 
