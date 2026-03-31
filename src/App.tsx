@@ -1289,9 +1289,6 @@ export default function App() {
                   )}
 
                   <div className="space-y-4">
-                    <p className="auth-terms auth-terms-singleline text-[11px] text-zinc-500">
-                      By continuing, you agree to use this system with your official university account.
-                    </p>
                     <Auth
                       user={user}
                       loading={loading}
@@ -1299,6 +1296,9 @@ export default function App() {
                       recaptchaEnabled={true}
                       recaptchaSiteKey={recaptchaSiteKey}
                     />
+                    <p className="auth-terms auth-terms-singleline text-[11px] text-zinc-500">
+                      By continuing, you agree to use this system with your official university account.
+                    </p>
                     <div className="auth-meta flex items-center justify-center lg:justify-start gap-2 text-[11px] text-zinc-500">
                       <span className="auth-meta-dot" />
                       <span>Protected by Google Authentication</span>
